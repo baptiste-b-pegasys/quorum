@@ -251,6 +251,7 @@ func ApplyTransactionOnMPS(config *params.ChainConfig, bc ChainContext, author *
 	if err != nil {
 		return nil, err
 	}
+	//msg, err := tx.AsMessage(types.MakeSigner(config, header.Number))
 	targetPsi := make(map[types.PrivateStateIdentifier]struct{})
 	for _, managedParty := range managedParties {
 		psMetadata, err := bc.PrivateStateManager().ResolveForManagedParty(managedParty)

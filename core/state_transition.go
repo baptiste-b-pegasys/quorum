@@ -389,13 +389,10 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	// which can cause a 'BAD BLOCK' crash.
 	if !isPrivate {
 		st.gas = leftoverGas
-	}
-	// End Quorum
 
-	st.refundGas()
-	st.state.AddBalance(st.evm.Context.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.gasPrice))
-
-	if isPrivate {
+		st.refundGas()
+		st.state.AddBalance(st.evm.Context.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.gasPrice))
+	} else {
 		return &ExecutionResult{
 			UsedGas:    0,
 			Err:        vmerr,
