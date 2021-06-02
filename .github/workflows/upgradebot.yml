@@ -1,9 +1,13 @@
 name: Upgrade geth bot
 on:
   workflow_dispatch:
+  push:
+  schedule:
+    # * is a special character in YAML so you have to quote this string
+    - cron:  '0 6,12 * * *'
 
 jobs:
-  say_hello:
+  check_geth:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Go 1.15
