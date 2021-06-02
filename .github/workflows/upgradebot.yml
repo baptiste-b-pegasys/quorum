@@ -7,8 +7,8 @@ on:
     - cron:  '0 6,12 * * *'
 
 env:
-          GITHUB_USERNAME: ${{ secrets.QUORUM_BOT_GITHUB_USERNAME }}
-          GITHUB_USER_TOKEN: ${{ secrets.QUORUM_BOT_GITHUB_USER_TOKEN }}
+  GITHUB_USERNAME: ${{ secrets.QUORUM_BOT_GITHUB_USERNAME }}
+  GITHUB_USER_TOKEN: ${{ secrets.QUORUM_BOT_GITHUB_USER_TOKEN }}
   
 jobs:
   check_geth:
@@ -23,7 +23,5 @@ jobs:
         run: |
           go get github.com/baptiste-b-pegasys/quorum-bots
       - name: Execute PR check
-        
         run: |
-          echo $GITHUB_USERNAME
           go run github.com/baptiste-b-pegasys/quorum-bots
