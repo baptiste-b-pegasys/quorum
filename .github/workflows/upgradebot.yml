@@ -1,0 +1,22 @@
+name: Upgrade geth bot
+on:
+  workflow_dispatch:
+
+jobs:
+  say_hello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Go 1.15
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.15
+        id: go
+      - name: Get quorum bot
+        run: |
+          go get github.com/baptiste-b-pegasys/quorum-bots
+      - name: Execute PR check
+        env:
+          GITHUB_USERNAME: ${{ secrets.QUORUM_BOT_GITHUB_USERNAME }}
+          GITHUB_USER_TOKEN: ${{ secrets.QUORUM_BOT_GITHUB_USER_TOKEN }}
+        run: |
+          go run github.com/baptiste-b-pegasys/quorum-bots
