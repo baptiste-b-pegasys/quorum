@@ -816,16 +816,17 @@ func (api *PrivateDebugAPI) TraceCall(ctx context.Context, args ethapi.CallArgs,
 		if config != nil && config.Reexec != nil {
 			reexec = *config.Reexec
 		}
-		_, _, statedb, _, err = api.computeTxEnv(ctx, block, 0, reexec)
+		_, _, stateDb, privateStateDb, err := api.computeTxEnv(ctx, block, 0, reexec)
 		if err != nil {
 			return nil, err
 		}
+		statedb = EthAPIState{stateDb, privateStateDb}
 	}
 
 	// Execute the trace
 	msg := args.ToMessage(api.eth.APIBackend.RPCGasCap())
 	vmctx := core.NewEVMContext(msg, header, api.eth.blockchain, nil)
-	return api.traceTx(ctx, msg, nil, vmctx, statedb.(*state.StateDB), nil, config)
+	return api.traceTx(ctx, msg, nil, vmctx, statedb.(EthAPIState).state, statedb.(EthAPIState).privateState, config)
 }
 
 // traceTx configures a new tracer according to the provided configuration, and
