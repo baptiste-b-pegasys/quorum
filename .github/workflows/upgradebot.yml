@@ -14,14 +14,16 @@ jobs:
   check_geth:
     runs-on: ubuntu-latest
     steps:
-      - name: Set up Go 1.15
+      - name: Set up Go 1.15.5
         uses: actions/setup-go@v1
         with:
-          go-version: 1.15
+          go-version: 1.15.5
         id: go
       - name: Clone upgrade geth bot
         run: |
+          git version
           git clone https://github.com/Consensys/quorum-bots.git $GOPATH/src/upgradebot
       - name: Execute upgrade geth bot
         run: |
-          go run upgradebot/cmd
+          go version
+          # go run upgradebot/cmd
