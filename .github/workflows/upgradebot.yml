@@ -21,8 +21,6 @@ jobs:
         id: go
       - name: Git Show Version
         run: git version
-      - name: Git Version
-        uses: codacy/git-version@2.25.1
       - name: Clone upgrade geth bot
         run: |
           git version
