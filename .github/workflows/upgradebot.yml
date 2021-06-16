@@ -12,13 +12,17 @@ env:
   
 jobs:
   check_geth:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Set up Go 1.15.5
         uses: actions/setup-go@v1
         with:
           go-version: 1.15.5
         id: go
+      - name: Git Show Version
+        run: git version
+      - name: Git Version
+        uses: codacy/git-version@2.25.1
       - name: Clone upgrade geth bot
         run: |
           git version
