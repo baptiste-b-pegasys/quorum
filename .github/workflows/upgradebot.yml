@@ -14,13 +14,19 @@ jobs:
   check_geth:
     runs-on: ubuntu-20.04
     steps:
+      - name: Git Show Version
+        run: |
+          git version
+          which git
+          cat /etc/apt/sources.list
+          ls /etc/apt/sources.list.d
+          apt-get update
+          apt-get install -y git
       - name: Set up Go 1.15.5
         uses: actions/setup-go@v1
         with:
           go-version: 1.15.5
         id: go
-      - name: Git Show Version
-        run: git version
       - name: Clone upgrade geth bot
         run: |
           git version
