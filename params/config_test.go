@@ -175,6 +175,7 @@ func TestCheckCompatible(t *testing.T) {
 				RewindTo:     30,
 			},
 		},
+		{
 			stored:  &ChainConfig{Istanbul: &IstanbulConfig{Ceil2Nby3Block: big.NewInt(10)}},
 			new:     &ChainConfig{Istanbul: &IstanbulConfig{Ceil2Nby3Block: big.NewInt(20)}},
 			head:    4,
