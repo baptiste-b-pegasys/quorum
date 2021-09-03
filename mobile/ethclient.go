@@ -21,6 +21,8 @@ package geth
 import (
 	"math/big"
 
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
@@ -138,7 +140,9 @@ func (ec *EthereumClient) SubscribeNewHead(ctx *Context, handler NewHeadHandler,
 				handler.OnNewHead(&Header{header})
 
 			case err := <-rawSub.Err():
-				handler.OnError(err.Error())
+				if err != nil {
+					handler.OnError(err.Error())
+				}
 				return
 			}
 		}
@@ -198,8 +202,8 @@ func (ec *EthereumClient) FilterLogs(ctx *Context, query *FilterQuery) (logs *Lo
 	}
 	// Temp hack due to vm.Logs being []*vm.Log
 	res := make([]*types.Log, len(rawLogs))
-	for i, log := range rawLogs {
-		res[i] = &log
+	for i := range rawLogs {
+		res[i] = &rawLogs[i]
 	}
 	return &Logs{res}, nil
 }
@@ -227,7 +231,9 @@ func (ec *EthereumClient) SubscribeFilterLogs(ctx *Context, query *FilterQuery, 
 				handler.OnFilterLogs(&Log{&log})
 
 			case err := <-rawSub.Err():
-				handler.OnError(err.Error())
+				if err != nil {
+					handler.OnError(err.Error())
+				}
 				return
 			}
 		}
@@ -298,9 +304,9 @@ func (ec *EthereumClient) SuggestGasPrice(ctx *Context) (price *BigInt, _ error)
 // the current pending state of the backend blockchain. There is no guarantee that this is
 // the true gas limit requirement as other transactions may be added or removed by miners,
 // but it should provide a basis for setting a reasonable default.
-func (ec *EthereumClient) EstimateGas(ctx *Context, msg *CallMsg) (gas *BigInt, _ error) {
+func (ec *EthereumClient) EstimateGas(ctx *Context, msg *CallMsg) (gas int64, _ error) {
 	rawGas, err := ec.client.EstimateGas(ctx.context, msg.msg)
-	return &BigInt{rawGas}, err
+	return int64(rawGas), err
 }
 
 // SendTransaction injects a signed transaction into the pending pool for execution.
@@ -308,5 +314,5 @@ func (ec *EthereumClient) EstimateGas(ctx *Context, msg *CallMsg) (gas *BigInt, 
 // If the transaction was a contract creation use the TransactionReceipt method to get the
 // contract address after the transaction has been mined.
 func (ec *EthereumClient) SendTransaction(ctx *Context, tx *Transaction) error {
-	return ec.client.SendTransaction(ctx.context, tx.tx)
+	return ec.client.SendTransaction(ctx.context, tx.tx, bind.PrivateTxArgs{})
 }

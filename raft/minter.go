@@ -18,23 +18,29 @@ package raft
 
 import (
 	"fmt"
-	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/eapache/channels"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
+)
+
+var (
+	extraVanity = 32 // Fixed number of extra-data prefix bytes reserved for arbitrary signer vanity
 )
 
 // Current state information for building the next block
@@ -50,7 +56,7 @@ type minter struct {
 	config           *params.ChainConfig
 	mu               sync.Mutex
 	mux              *event.TypeMux
-	eth              miner.Backend
+	eth              *RaftService
 	chain            *core.BlockChain
 	chainDb          ethdb.Database
 	coinbase         common.Address
@@ -62,8 +68,13 @@ type minter struct {
 	invalidRaftOrderingChan chan InvalidRaftOrdering
 	chainHeadChan           chan core.ChainHeadEvent
 	chainHeadSub            event.Subscription
-	txPreChan               chan core.TxPreEvent
+	txPreChan               chan core.NewTxsEvent
 	txPreSub                event.Subscription
+}
+
+type extraSeal struct {
+	RaftId    []byte // RaftID of the block minter
+	Signature []byte // Signature of the block minter
 }
 
 func newMinter(config *params.ChainConfig, eth *RaftService, blockTime time.Duration) *minter {
@@ -78,12 +89,12 @@ func newMinter(config *params.ChainConfig, eth *RaftService, blockTime time.Dura
 		speculativeChain: newSpeculativeChain(),
 
 		invalidRaftOrderingChan: make(chan InvalidRaftOrdering, 1),
-		chainHeadChan:           make(chan core.ChainHeadEvent, 1),
-		txPreChan:               make(chan core.TxPreEvent, 4096),
+		chainHeadChan:           make(chan core.ChainHeadEvent, core.GetChainHeadChannleSize()),
+		txPreChan:               make(chan core.NewTxsEvent, 4096),
 	}
 
 	minter.chainHeadSub = eth.BlockChain().SubscribeChainHeadEvent(minter.chainHeadChan)
-	minter.txPreSub = eth.TxPool().SubscribeTxPreEvent(minter.txPreChan)
+	minter.txPreSub = eth.TxPool().SubscribeNewTxsEvent(minter.txPreChan)
 
 	minter.speculativeChain.clear(minter.chain.CurrentBlock())
 
@@ -202,7 +213,7 @@ func throttle(rate time.Duration, f func()) func() {
 
 		for range ticker.C {
 			<-request.Out()
-			go f()
+			f()
 		}
 	}()
 
@@ -230,7 +241,7 @@ func (minter *minter) mintingLoop() {
 }
 
 func generateNanoTimestamp(parent *types.Block) (tstamp int64) {
-	parentTime := parent.Time().Int64()
+	parentTime := int64(parent.Time())
 	tstamp = time.Now().UnixNano()
 
 	if parentTime >= tstamp {
@@ -251,21 +262,25 @@ func (minter *minter) createWork() *work {
 		ParentHash: parent.Hash(),
 		Number:     parentNumber.Add(parentNumber, common.Big1),
 		Difficulty: ethash.CalcDifficulty(minter.config, uint64(tstamp), parent.Header()),
-		GasLimit:   core.CalcGasLimit(parent),
-		GasUsed:    new(big.Int),
+		GasLimit:   minter.eth.calcGasLimitFunc(parent),
+		GasUsed:    0,
 		Coinbase:   minter.coinbase,
-		Time:       big.NewInt(tstamp),
+		Time:       uint64(tstamp),
 	}
 
-	publicState, privateState, err := minter.chain.StateAt(parent.Root())
+	publicState, privateStateManager, err := minter.chain.StateAt(parent.Root())
 	if err != nil {
 		panic(fmt.Sprint("failed to get parent state: ", err))
+	}
+	defaultPrivateState, err := privateStateManager.DefaultState()
+	if err != nil {
+		panic(fmt.Sprint("failed to get default private state: ", err))
 	}
 
 	return &work{
 		config:       minter.config,
 		publicState:  publicState,
-		privateState: privateState,
+		privateState: defaultPrivateState,
 		header:       header,
 	}
 }
@@ -290,7 +305,7 @@ func (minter *minter) firePendingBlockEvents(logs []*types.Log) {
 	}
 
 	go func() {
-		minter.mux.Post(core.PendingLogsEvent{Logs: copiedLogs})
+		minter.eth.pendingLogsFeed.Send(copiedLogs)
 		minter.mux.Post(core.PendingStateEvent{})
 	}()
 }
@@ -302,7 +317,7 @@ func (minter *minter) mintNewBlock() {
 	work := minter.createWork()
 	transactions := minter.getTransactions()
 
-	committedTxes, publicReceipts, privateReceipts, logs := work.commitTransactions(transactions, minter.chain)
+	committedTxes, publicReceipts, _, logs := work.commitTransactions(transactions, minter.chain)
 	txCount := len(committedTxes)
 
 	if txCount == 0 {
@@ -318,11 +333,6 @@ func (minter *minter) mintNewBlock() {
 	ethash.AccumulateRewards(minter.chain.Config(), work.publicState, header, nil)
 	header.Root = work.publicState.IntermediateRoot(minter.chain.Config().IsEIP158(work.header.Number))
 
-	// NOTE: < QuorumChain creates a signature here and puts it in header.Extra. >
-
-	allReceipts := append(publicReceipts, privateReceipts...)
-	header.Bloom = types.CreateBloom(allReceipts)
-
 	// update block hash since it is now available, but was not when the
 	// receipt/log of individual transactions were created:
 	headerHash := header.Hash()
@@ -330,23 +340,28 @@ func (minter *minter) mintNewBlock() {
 		l.BlockHash = headerHash
 	}
 
-	block := types.NewBlock(header, committedTxes, nil, publicReceipts)
+	//Sign the block and build the extraSeal struct
+	extraSealBytes := minter.buildExtraSeal(headerHash)
+
+	// add vanity and seal to header
+	// NOTE: leaving vanity blank for now as a space for any future data
+	header.Extra = make([]byte, extraVanity+len(extraSealBytes))
+	copy(header.Extra[extraVanity:], extraSealBytes)
+
+	block := types.NewBlock(header, committedTxes, nil, publicReceipts, new(trie.Trie))
 
 	log.Info("Generated next block", "block num", block.Number(), "num txes", txCount)
 
 	deleteEmptyObjects := minter.chain.Config().IsEIP158(block.Number())
-	if _, err := work.publicState.CommitTo(minter.chainDb, deleteEmptyObjects); err != nil {
-		panic(fmt.Sprint("error committing public state: ", err))
-	}
-	if _, privStateErr := work.privateState.CommitTo(minter.chainDb, deleteEmptyObjects); privStateErr != nil {
-		panic(fmt.Sprint("error committing private state: ", privStateErr))
+	if err := minter.chain.CommitBlockWithState(deleteEmptyObjects, work.publicState, work.privateState); err != nil {
+		panic(err)
 	}
 
 	minter.speculativeChain.extend(block)
 
 	minter.mux.Post(core.NewMinedBlockEvent{Block: block})
 
-	elapsed := time.Since(time.Unix(0, header.Time.Int64()))
+	elapsed := time.Since(time.Unix(0, int64(header.Time)))
 	log.Info("🔨  Mined block", "number", block.Number(), "hash", fmt.Sprintf("%x", block.Hash().Bytes()[:4]), "elapsed", elapsed)
 }
 
@@ -397,13 +412,41 @@ func (env *work) commitTransaction(tx *types.Transaction, bc *core.BlockChain, g
 
 	var author *common.Address
 	var vmConf vm.Config
-	publicReceipt, privateReceipt, _, err := core.ApplyTransaction(env.config, bc, author, gp, env.publicState, env.privateState, env.header, tx, env.header.GasUsed, vmConf)
+	txnStart := time.Now()
+	// Note that raft minter doesn't care about private state etc, hence can pass forceNonParty=true and privateStateRepo=nil
+	publicReceipt, privateReceipt, err := core.ApplyTransaction(env.config, bc, author, gp, env.publicState, env.privateState, env.header, tx, &env.header.GasUsed, vmConf, true, nil)
 	if err != nil {
 		env.publicState.RevertToSnapshot(publicSnapshot)
 		env.privateState.RevertToSnapshot(privateSnapshot)
 
 		return nil, nil, err
 	}
+	log.EmitCheckpoint(log.TxCompleted, "tx", tx.Hash().Hex(), "time", time.Since(txnStart))
 
 	return publicReceipt, privateReceipt, nil
+}
+
+func (minter *minter) buildExtraSeal(headerHash common.Hash) []byte {
+	//Sign the headerHash
+	nodeKey := minter.eth.nodeKey
+	sig, err := crypto.Sign(headerHash.Bytes(), nodeKey)
+	if err != nil {
+		log.Warn("Block sealing failed", "err", err)
+	}
+
+	//build the extraSeal struct
+	raftIdString := hexutil.EncodeUint64(uint64(minter.eth.raftProtocolManager.raftId))
+
+	extra := extraSeal{
+		RaftId:    []byte(raftIdString[2:]), //remove the 0x prefix
+		Signature: sig,
+	}
+
+	//encode to byte array for storage
+	extraDataBytes, err := rlp.EncodeToBytes(extra)
+	if err != nil {
+		log.Warn("Header.Extra Data Encoding failed", "err", err)
+	}
+
+	return extraDataBytes
 }

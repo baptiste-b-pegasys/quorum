@@ -26,9 +26,22 @@ const (
 	errInvalidMsg
 )
 
+// Quorum
+//
+// Constants for peer connection errors
+const (
+	// When permissioning is enabled, and node is not permissioned in the network
+	errPermissionDenied = iota + 100
+	// Unauthorized node joining existing raft cluster
+	errNotInRaftCluster
+)
+
 var errorToString = map[int]string{
 	errInvalidMsgCode: "invalid message code",
 	errInvalidMsg:     "invalid message",
+	// Quorum
+	errPermissionDenied: "permission denied",
+	errNotInRaftCluster: "not in raft cluster",
 }
 
 type peerError struct {
@@ -48,8 +61,8 @@ func newPeerError(code int, format string, v ...interface{}) *peerError {
 	return err
 }
 
-func (self *peerError) Error() string {
-	return self.message
+func (pe *peerError) Error() string {
+	return pe.message
 }
 
 var errProtocolReturned = errors.New("protocol returned")

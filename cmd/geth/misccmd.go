@@ -108,12 +108,16 @@ func makedag(ctx *cli.Context) error {
 
 func version(ctx *cli.Context) error {
 	fmt.Println(strings.Title(clientIdentifier))
-	fmt.Println("Version:", params.Version)
+	fmt.Println("Version:", params.VersionWithMeta)
 	if gitCommit != "" {
 		fmt.Println("Git Commit:", gitCommit)
 	}
+	if gitDate != "" {
+		fmt.Println("Git Commit Date:", gitDate)
+	}
 	fmt.Println("Quorum Version:", params.QuorumVersion)
 	fmt.Println("Architecture:", runtime.GOARCH)
+	fmt.Println("Protocol Versions:", eth.ProtocolVersions)
 	fmt.Println("Network Id:", eth.DefaultConfig.NetworkId)
 	fmt.Println("Go Version:", runtime.Version())
 	fmt.Println("Operating System:", runtime.GOOS)
@@ -134,7 +138,6 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with geth. If not, see <http://www.gnu.org/licenses/>.
-`)
+along with geth. If not, see <http://www.gnu.org/licenses/>.`)
 	return nil
 }

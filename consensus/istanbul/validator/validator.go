@@ -17,6 +17,8 @@
 package validator
 
 import (
+	"bytes"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/istanbul"
 )
@@ -27,16 +29,8 @@ func New(addr common.Address) istanbul.Validator {
 	}
 }
 
-func NewSet(addrs []common.Address, policy istanbul.ProposerPolicy) istanbul.ValidatorSet {
-	switch policy {
-	case istanbul.RoundRobin:
-		return newDefaultSet(addrs, roundRobinProposer)
-	case istanbul.Sticky:
-		return newDefaultSet(addrs, stickyProposer)
-	}
-
-	// use round-robin policy as default proposal policy
-	return newDefaultSet(addrs, roundRobinProposer)
+func NewSet(addrs []common.Address, policy *istanbul.ProposerPolicy) istanbul.ValidatorSet {
+	return newDefaultSet(addrs, policy)
 }
 
 func ExtractValidators(extraData []byte) []common.Address {
@@ -52,4 +46,21 @@ func ExtractValidators(extraData []byte) []common.Address {
 // Check whether the extraData is presented in prescribed form
 func ValidExtraData(extraData []byte) bool {
 	return len(extraData)%common.AddressLength == 0
+}
+
+func SortedAddresses(validators []istanbul.Validator) []common.Address {
+	addrs := make([]common.Address, len(validators))
+	for i, validator := range validators {
+		addrs[i] = validator.Address()
+	}
+
+	for i := 0; i < len(addrs); i++ {
+		for j := i + 1; j < len(addrs); j++ {
+			if bytes.Compare(addrs[i][:], addrs[j][:]) > 0 {
+				addrs[i], addrs[j] = addrs[j], addrs[i]
+			}
+		}
+	}
+
+	return addrs
 }

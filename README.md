@@ -1,150 +1,97 @@
-# Quorum
+# <img src="https://raw.githubusercontent.com/consensys/quorum/master/logo.png" width="200" height="35"/>
 
-<a href="https://quorumslack.azurewebsites.net" target="_blank" rel="noopener"><img title="Quorum Slack" src="https://quorumslack.azurewebsites.net/badge.svg" alt="Quorum Slack" /></a>
+<a href="https://www.goquorum.com/slack-inviter" target="_blank" rel="noopener"><img title="Quorum Slack" src="https://93ecjxb0d3.execute-api.us-east-1.amazonaws.com/Express/badge.svg" alt="Quorum Slack" /></a>
+![Build Check](https://github.com/jpmorganchase/quorum/workflows/Build%20Check/badge.svg?branch=master)
+[![Download](https://api.bintray.com/packages/quorumengineering/quorum/geth/images/download.svg)](https://bintray.com/quorumengineering/quorum/geth/_latestVersion)
+[![Docker Pulls](https://img.shields.io/docker/pulls/quorumengineering/quorum)](https://hub.docker.com/r/quorumengineering/quorum)
 
-Quorum is an Ethereum-based distributed ledger protocol with transaction/contract privacy and new consensus mechanisms.
+GoQuorum is an Ethereum-based distributed ledger protocol with transaction/contract privacy and new consensus mechanisms.
 
-Quorum is a fork of [go-ethereum](https://github.com/ethereum/go-ethereum) and is updated in line with go-ethereum releases.
+GoQuorum is a fork of [go-ethereum](https://github.com/ethereum/go-ethereum) and is updated in line with go-ethereum releases.
 
 Key enhancements over go-ethereum:
 
-  * __Privacy__ - Quorum supports private transactions and private contracts through public/private state separation and utilising [Constellation](https://github.com/jpmorganchase/constellation), a peer-to-peer encrypted message exchange for directed transfer of private data to network participants
-  * __Alternative Consensus Mechanisms__ - with no need for POW/POS in a permissioned network, Quorum instead offers multiple consensus mechanisms that are more appropriate for consortium chains:
-    * __Raft-based Consensus__ - a consensus model for faster blocktimes, transaction finality, and on-demand block creation
-    * __Istanbul BFT__ - a PBFT-inspired consensus algorithm with transaction finality, by AMIS.
-  * __Peer Permissioning__ - node/peer permissioning using smart contracts, ensuring only known parties can join the network
-  * __Higher Performance__ - Quorum offers significantly higher performance than public geth
-
-Note: The QuorumChain consensus algorithm is not yet supported by this release.
+* [__Privacy__](https://docs.goquorum.consensys.net/en/stable/Concepts/Privacy/Privacy/) - GoQuorum supports private transactions and private contracts through public/private state separation, and utilises peer-to-peer encrypted message exchanges (see [Constellation](https://github.com/consensys/constellation) and [Tessera](https://github.com/consensys/tessera)) for directed transfer of private data to network participants
+* [__Alternative Consensus Mechanisms__](https://docs.goquorum.consensys.net/en/stable/Concepts/Consensus/Overview/) - with no need for POW/POS in a permissioned network, GoQuorum instead offers multiple consensus mechanisms that are more appropriate for consortium chains:
+    * [__Raft-based Consensus__](https://docs.goquorum.consensys.net/en/stable/Concepts/Consensus/Raft/) - a consensus model for faster blocktimes, transaction finality, and on-demand block creation
+    * [__Istanbul BFT__](https://docs.goquorum.consensys.net/en/stable/Concepts/Consensus/IBFT/) - a PBFT-inspired consensus algorithm with transaction finality, by AMIS.
+    * [__Clique POA Consensus__](https://github.com/ethereum/EIPs/issues/225) - a default POA consensus algorithm bundled with Go Ethereum.
+* [__Peer Permissioning__](https://docs.goquorum.consensys.net/en/stable/Concepts/Permissioning/PermissionsOverview/) - node/peer permissioning, ensuring only known parties can join the network
+* [__Account Management__](https://docs.goquorum.consensys.net/en/stable/Concepts/AccountManagement/) - GoQuorum introduced account plugins, which allows GoQuorum or clef to be extended with alternative methods of managing accounts including external vaults.
+* [__Pluggable Architecture__](https://docs.goquorum.consensys.net/en/stable/Concepts/Plugins/Plugins/) -  allows adding additional features as plugins to the core `geth`, providing extensibility, flexibility, and distinct isolation of GoQuorum features.
+* __Higher Performance__ - GoQuorum offers significantly higher performance throughput than public geth
 
 ## Architecture
 
-<a href="https://github.com/jpmorganchase/quorum/wiki/Transaction-Processing#private-transaction-process-flow">![Quorum privacy architecture](https://github.com/jpmorganchase/quorum-docs/raw/master/images/QuorumTransactionProcessing.JPG)</a>
+![GoQuorum Tessera Privacy Flow](https://github.com/consensys/quorum/blob/master/docs/Quorum%20Design.png)
 
-The above diagram is a high-level overview of the privacy architecture used by Quorum. For more in-depth discussion of the components, refer to the [wiki](https://github.com/jpmorganchase/quorum/wiki/) pages.
+The above diagram is very high-level overview of component architecture used by GoQuorum. For more in-depth discussion of the components and how they interact, please refer to [lifecycle of a private transaction](https://docs.goquorum.consensys.net/en/stable/Concepts/Privacy/PrivateTransactionLifecycle/).
 
 ## Quickstart
+There are [several ways](https://docs.goquorum.consensys.net/en/stable/HowTo/GetStarted/GettingStartedOverview/) to quickly get up and running with GoQuorum.  One of the easiest is to use [GoQuorum Wizard](https://docs.goquorum.consensys.net/en/stable/HowTo/GetStarted/GettingStartedOverview/#goquorum-wizard) - a command line tool that allows users to set up a development GoQuorum network on their local machine in less than *2 minutes*.
 
-The quickest way to get started with Quorum is using [VirtualBox](https://www.virtualbox.org/wiki/Downloads) and [Vagrant](https://www.vagrantup.com/downloads.html):
+## GoQuorum Projects
 
-```sh
-git clone https://github.com/jpmorganchase/quorum-examples
-cd quorum-examples
-vagrant up
-# (should take 5 or so minutes)
-vagrant ssh
-```
+Check out some of the interesting projects we are actively working on:
 
-Now that you have a fully-functioning Quorum environment set up, let's run the 7-node cluster example. This will spin up several nodes with a mix of voters, block makers, and unprivileged nodes.
-
-```sh
-# (from within vagrant env, use `vagrant ssh` to enter)
-ubuntu@ubuntu-xenial:~$ cd quorum-examples/7nodes
-
-$ ./raft-init.sh
-# (output condensed for clarity)
-[*] Cleaning up temporary data directories
-[*] Configuring node 1
-[*] Configuring node 2 as block maker and voter
-[*] Configuring node 3
-[*] Configuring node 4 as voter
-[*] Configuring node 5 as voter
-[*] Configuring node 6
-[*] Configuring node 7
-
-$ ./raft-start.sh
-[*] Starting Constellation nodes
-[*] Starting bootnode... waiting... done
-[*] Starting node 1
-[*] Starting node 2
-[*] Starting node 3
-[*] Starting node 4
-[*] Starting node 5
-[*] Starting node 6
-[*] Starting node 7
-[*] Unlocking account and sending first transaction
-Contract transaction send: TransactionHash: 0xbfb7bfb97ba9bacbf768e67ac8ef05e4ac6960fc1eeb6ab38247db91448b8ec6 waiting to be mined...
-true
-```
-
-We now have a 7-node Quorum cluster with a [private smart contract](https://github.com/jpmorganchase/quorum-examples/blob/master/examples/7nodes/script1.js) (SimpleStorage) sent from `node 1` "for" `node 7` (denoted by the public key passed via `privateFor: ["ROAZBWtSacxXQrOe3FGAqJDyJjFePR5ce4TSIzmJ0Bc="]` in the `sendTransaction` call).
-
-Connect to any of the nodes and inspect them using the following commands:
-
-```sh
-$ geth attach ipc:qdata/dd1/geth.ipc
-$ geth attach ipc:qdata/dd2/geth.ipc
-...
-$ geth attach ipc:qdata/dd7/geth.ipc
+* [quorum-wizard](https://docs.goquorum.consensys.net/en/stable/HowTo/GetStarted/Wizard/GettingStarted/): Setup a GoQuorum network in 2 minutes!
+* [quorum-remix-plugin](https://docs.goquorum.consensys.net/en/stable/Reference/RemixPlugin/Overview/): The GoQuorum plugin for Ethereum's Remix IDE adds support for creating and interacting with private contracts on a GoQuorum network.
+* [Cakeshop](https://docs.goquorum.consensys.net/en/stable/HowTo/GetStarted/Cakeshop/): An integrated development environment and SDK for GoQuorum
+* [quorum-profiling](https://docs.goquorum.consensys.net/en/stable/Concepts/Profiling/): Toolset for stress testing & benchmarking GoQuorum networks. 
+* [quorum-examples](https://docs.goquorum.consensys.net/en/stable/Reference/GoQuorum-Projects/): GoQuorum demonstration examples
+* <img src="docs/images/qubernetes/k8s-logo.png" width="15"/> [qubernetes](https://docs.goquorum.consensys.net/en/stable/HowTo/GetStarted/GettingStartedOverview/#goquorum-on-kubernetes-qubernetes): Deploy GoQuorum on Kubernetes
+* [quorum-cloud](https://docs.goquorum.consensys.net/en/stable/HowTo/GetStarted/GettingStartedOverview/#creating-a-network-deployed-in-the-cloud): Tools to help deploy GoQuorum network in a cloud provider of choice
+* [quorum.js](https://docs.goquorum.consensys.net/en/stable/Reference/quorum.js/Overview/): Extends web3.js to support GoQuorum-specific APIs
+* Zero Knowledge on GoQuorum
+   * [ZSL](https://docs.goquorum.consensys.net/en/stable/Reference/GoQuorum-Projects/#zsl-proof-of-concept) POC and [ZSL on GoQuorum](https://github.com/ConsenSys/zsl-q/blob/master/README.md)
+   * [Anonymous Zether](https://github.com/ConsenSys/anonymous-zether) implementation
 
 
-# e.g.
 
-$ geth attach ipc:qdata/dd2/geth.ipc
-Welcome to the Geth JavaScript console!
-
-instance: Geth/v1.5.0-unstable/linux/go1.7.3
-coinbase: 0xca843569e3427144cead5e4d5999a3d0ccf92b8e
-at block: 679 (Tue, 15 Nov 2016 00:01:05 UTC)
- datadir: /home/ubuntu/quorum-examples/7nodes/qdata/dd2
- modules: admin:1.0 debug:1.0 eth:1.0 net:1.0 personal:1.0 quorum:1.0 rpc:1.0 txpool:1.0 web3:1.0
-
-# let's look at the private txn created earlier:
-> eth.getTransaction("0xbfb7bfb97ba9bacbf768e67ac8ef05e4ac6960fc1eeb6ab38247db91448b8ec6")
-{
-  blockHash: "0xb6aec633ef1f79daddc071bec8a56b7099ab08ac9ff2dc2764ffb34d5a8d15f8",
-  blockNumber: 1,
-  from: "0xed9d02e382b34818e88b88a309c7fe71e65f419d",
-  gas: 300000,
-  gasPrice: 0,
-  hash: "0xbfb7bfb97ba9bacbf768e67ac8ef05e4ac6960fc1eeb6ab38247db91448b8ec6",
-  input: "0x9820c1a5869713757565daede6fcec57f3a6b45d659e59e72c98c531dcba9ed206fd0012c75ce72dc8b48cd079ac08536d3214b1a4043da8cea85be858b39c1d",
-  nonce: 0,
-  r: "0x226615349dc143a26852d91d2dff1e57b4259b576f675b06173e9972850089e7",
-  s: "0x45d74765c5400c5c280dd6285a84032bdcb1de85a846e87b57e9e0cedad6c427",
-  to: null,
-  transactionIndex: 1,
-  v: "0x25",
-  value: 0
-}
-```
-
-Note in particular the `v` field of "0x25" (37 in decimal) which marks this transaction as having a private payload (input).
-
-## Demonstrating Privacy
-Documentation detailing steps to demonstrate the privacy features of Quorum can be found in [quorum-examples/7nodes/README](https://github.com/jpmorganchase/quorum-examples/tree/master/examples/7nodes/README.md).
-
-## Further Reading
-
-Further documentation can be found in the [docs](docs/) folder and on the [wiki](https://github.com/jpmorganchase/quorum/wiki/).
-
-## See also
-
-* [Quorum](https://github.com/jpmorganchase/quorum): this repository
-* [Constellation](https://github.com/jpmorganchase/constellation): peer-to-peer encrypted message exchange for transaction privacy
-* [Raft Consensus Documentation](raft/doc.md)
-* [Istanbul BFT Consensus Documentation](https://github.com/ethereum/EIPs/issues/650): [RPC API](https://github.com/getamis/go-ethereum/wiki/RPC-API) and [technical article](https://medium.com/getamis/istanbul-bft-ibft-c2758b7fe6ff)
-* [ZSL](https://github.com/jpmorganchase/quorum/wiki/ZSL) wiki page and [documentation](https://github.com/jpmorganchase/zsl-q/blob/master/README.md)
-* [quorum-examples](https://github.com/jpmorganchase/quorum-examples): example quorum clusters
-* [quorum-tools](https://github.com/jpmorganchase/quorum-tools): local cluster orchestration, and integration testing tool
-* [Quorum Wiki](https://github.com/jpmorganchase/quorum/wiki)
+## Official Docker Containers
+The official docker containers can be found under https://hub.docker.com/u/quorumengineering/
 
 ## Third Party Tools/Libraries
 
-The following Quorum-related libraries/applications have been created by Third Parties and as such are not specifically endorsed by J.P. Morgan.  A big thanks to the developers for improving the tooling around Quorum!
+The following GoQuorum-related libraries/applications have been created by Third Parties and as such are not specifically endorsed by J.P. Morgan.  A big thanks to the developers for improving the tooling around GoQuorum!
 
-* [Quorum-Genesis](https://github.com/davebryson/quorum-genesis) - A simple CL utility for Quorum to help populate the genesis file with voters and makers
-* [QuorumNetworkManager](https://github.com/ConsenSys/QuorumNetworkManager) - makes creating & managing Quorum networks easy
-* [web3j-quorum](https://github.com/web3j/quorum) - an extension to the web3j Java library providing support for the Quorum API
-* [Nethereum Quorum](https://github.com/Nethereum/Nethereum/tree/master/src/Nethereum.Quorum) - a .NET Quorum adapter
-* [ERC20 REST service](https://github.com/blk-io/erc20-rest-service) - a Quorum-supported RESTful service for creating and managing ERC-20 tokens
-* [Quorum Maker](https://github.com/synechron-finlabs/quorum-maker/tree/development) - a utility to create Quorum nodes
+* [Quorum Blockchain Explorer](https://github.com/web3labs/epirus-free) - a Blockchain Explorer for GoQuorum which supports viewing private transactions
+* [Quorum-Genesis](https://github.com/davebryson/quorum-genesis) - A simple CL utility for GoQuorum to help populate the genesis file with voters and makers
+* [Quorum Maker](https://github.com/synechron-finlabs/quorum-maker/) - a utility to create GoQuorum nodes
+* [QuorumNetworkManager](https://github.com/ConsenSys/QuorumNetworkManager) - makes creating & managing GoQuorum networks easy
+* [ERC20 REST service](https://github.com/web3labs/erc20-rest-service) - a GoQuorum-supported RESTful service for creating and managing ERC-20 tokens
+* [Nethereum Quorum](https://github.com/Nethereum/Nethereum/tree/master/src/Nethereum.Quorum) - a .NET GoQuorum adapter
+* [web3j-quorum](https://github.com/web3j/web3j-quorum) - an extension to the web3j Java library providing support for the GoQuorum API
+* [Apache Camel](http://github.com/apache/camel) - an Apache Camel component providing support for the GoQuorum API using web3j library. Here is the artcile describing how to use Apache Camel with Ethereum and GoQuorum https://medium.com/@bibryam/enterprise-integration-for-ethereum-fa67a1577d43
 
 ## Contributing
+GoQuorum is built on open source and we invite you to contribute enhancements. Upon review you will be required to complete a Contributor License Agreement (CLA) before we are able to merge. If you have any questions about the contribution process, please feel free to send an email to [info@goquorum.com](mailto:info@goquorum.com). Please see the [Contributors guide](.github/CONTRIBUTING.md) for more information about the process.
 
-Thank you for your interest in contributing to Quorum!
+## Reporting Security Bugs
+Security is part of our commitment to our users. At GoQuorum we have a close relationship with the security community, we understand the realm, and encourage security researchers to become part of our mission of building secure reliable software. This section explains how to submit security bugs, and what to expect in return.
 
-Quorum is built on open source and we invite you to contribute enhancements. Upon review you will be required to complete a Contributor License Agreement (CLA) before we are able to merge. If you have any questions about the contribution process, please feel free to send an email to [quorum_info@jpmorgan.com](mailto:quorum_info@jpmorgan.com).
+All security bugs in [GoQuorum](https://github.com/consensys/quorum) and its ecosystem ([Tessera](https://github.com/consensys/tessera), [Constellation](https://github.com/consensys/constellation), [Cakeshop](https://github.com/consensys/cakeshop), ..etc)  should be reported by email to [security-quorum@consensys.net](mailto:security-quorum@consensys.net). Please use the prefix **[security]** in your subject. This email is delivered to GoQuorum security team. Your email will be acknowledged, and you'll receive a more detailed response to your email as soon as possible indicating the next steps in handling your report. After the initial reply to your report, the security team will endeavor to keep you informed of the progress being made towards a fix and full announcement.
+
+If you have not received a reply to your email or you have not heard from the security team please contact any team member through GoQuorum slack security channel. **Please note that GoQuorum slack channels are public discussion forum**. When escalating to this medium, please do not disclose the details of the issue. Simply state that you're trying to reach a member of the security team.
+
+#### Responsible Disclosure Process
+GoQuorum project uses the following responsible disclosure process:
+
+- Once the security report is received it is assigned a primary handler. This person coordinates the fix and release process.
+- The issue is confirmed and a list of affected software is determined.
+- Code is audited to find any potential similar problems.
+- If it is determined, in consultation with the submitter, that a CVE-ID is required, the primary handler will trigger the process.
+- Fixes are applied to the public repository and a new release is issued.
+- On the date that the fixes are applied, announcements are sent to Quorum-announce.
+- At this point you would be able to disclose publicly your finding.
+
+**Note:** This process can take some time. Every effort will be made to handle the security bug in as timely a manner as possible, however it's important that we follow the process described above to ensure that disclosures are handled consistently.
+
+#### Receiving Security Updates
+The best way to receive security announcements is to subscribe to the Quorum-announce mailing list/channel. Any messages pertaining to a security issue will be prefixed with **[security]**.
+
+Comments on This Policy
+If you have any suggestions to improve this policy, please send an email to info@goquorum.com for discussion.
 
 ## License
 

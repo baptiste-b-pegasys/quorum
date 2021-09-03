@@ -22,7 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/istanbul"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/consensus/istanbul/validator"
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
@@ -50,11 +50,11 @@ type Tally struct {
 type Snapshot struct {
 	Epoch uint64 // The number of blocks after which to checkpoint and reset the pending votes
 
-	Number uint64                   `json:"number"`     // Block number where the snapshot was created
-	Hash   common.Hash              `json:"hash"`       // Block hash where the snapshot was created
-	Votes  []*Vote                  `json:"votes"`      // List of votes cast in chronological order
-	Tally  map[common.Address]Tally `json:"tally"`      // Current vote tally to avoid recalculating
-	ValSet istanbul.ValidatorSet    `json:"validators"` // Set of authorized validators at this moment
+	Number uint64                   // Block number where the snapshot was created
+	Hash   common.Hash              // Block hash where the snapshot was created
+	Votes  []*Vote                  // List of votes cast in chronological order
+	Tally  map[common.Address]Tally // Current vote tally to avoid recalculating
+	ValSet istanbul.ValidatorSet    // Set of authorized validators at this moment
 }
 
 // newSnapshot create a new snapshot with the specified startup parameters. This
@@ -157,106 +157,6 @@ func (s *Snapshot) uncast(address common.Address, authorize bool) bool {
 	return true
 }
 
-// apply creates a new authorization snapshot by applying the given headers to
-// the original one.
-func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
-	// Allow passing in no headers for cleaner code
-	if len(headers) == 0 {
-		return s, nil
-	}
-	// Sanity check that the headers can be applied
-	for i := 0; i < len(headers)-1; i++ {
-		if headers[i+1].Number.Uint64() != headers[i].Number.Uint64()+1 {
-			return nil, errInvalidVotingChain
-		}
-	}
-	if headers[0].Number.Uint64() != s.Number+1 {
-		return nil, errInvalidVotingChain
-	}
-	// Iterate through the headers and create a new snapshot
-	snap := s.copy()
-
-	for _, header := range headers {
-		// Remove any votes on checkpoint blocks
-		number := header.Number.Uint64()
-		if number%s.Epoch == 0 {
-			snap.Votes = nil
-			snap.Tally = make(map[common.Address]Tally)
-		}
-		// Resolve the authorization key and check against validators
-		validator, err := ecrecover(header)
-		if err != nil {
-			return nil, err
-		}
-		if _, v := snap.ValSet.GetByAddress(validator); v == nil {
-			return nil, errUnauthorized
-		}
-
-		// Header authorized, discard any previous votes from the validator
-		for i, vote := range snap.Votes {
-			if vote.Validator == validator && vote.Address == header.Coinbase {
-				// Uncast the vote from the cached tally
-				snap.uncast(vote.Address, vote.Authorize)
-
-				// Uncast the vote from the chronological list
-				snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)
-				break // only one vote allowed
-			}
-		}
-		// Tally up the new vote from the validator
-		var authorize bool
-		switch {
-		case bytes.Compare(header.Nonce[:], nonceAuthVote) == 0:
-			authorize = true
-		case bytes.Compare(header.Nonce[:], nonceDropVote) == 0:
-			authorize = false
-		default:
-			return nil, errInvalidVote
-		}
-		if snap.cast(header.Coinbase, authorize) {
-			snap.Votes = append(snap.Votes, &Vote{
-				Validator: validator,
-				Block:     number,
-				Address:   header.Coinbase,
-				Authorize: authorize,
-			})
-		}
-		// If the vote passed, update the list of validators
-		if tally := snap.Tally[header.Coinbase]; tally.Votes > snap.ValSet.Size()/2 {
-			if tally.Authorize {
-				snap.ValSet.AddValidator(header.Coinbase)
-			} else {
-				snap.ValSet.RemoveValidator(header.Coinbase)
-
-				// Discard any previous votes the deauthorized validator cast
-				for i := 0; i < len(snap.Votes); i++ {
-					if snap.Votes[i].Validator == header.Coinbase {
-						// Uncast the vote from the cached tally
-						snap.uncast(snap.Votes[i].Address, snap.Votes[i].Authorize)
-
-						// Uncast the vote from the chronological list
-						snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)
-
-						i--
-					}
-				}
-			}
-			// Discard any previous votes around the just changed account
-			for i := 0; i < len(snap.Votes); i++ {
-				if snap.Votes[i].Address == header.Coinbase {
-					snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)
-					i--
-				}
-			}
-			delete(snap.Tally, header.Coinbase)
-		}
-	}
-	snap.Number += uint64(len(headers))
-	snap.Hash = headers[len(headers)-1].Hash()
-
-	return snap, nil
-}
-
 // validators retrieves the list of authorized validators in ascending order.
 func (s *Snapshot) validators() []common.Address {
 	validators := make([]common.Address, 0, s.ValSet.Size())
@@ -271,4 +171,53 @@ func (s *Snapshot) validators() []common.Address {
 		}
 	}
 	return validators
+}
+
+type snapshotJSON struct {
+	Epoch  uint64                   `json:"epoch"`
+	Number uint64                   `json:"number"`
+	Hash   common.Hash              `json:"hash"`
+	Votes  []*Vote                  `json:"votes"`
+	Tally  map[common.Address]Tally `json:"tally"`
+
+	// for validator set
+	Validators []common.Address          `json:"validators"`
+	Policy     istanbul.ProposerPolicyId `json:"policy"`
+}
+
+func (s *Snapshot) toJSONStruct() *snapshotJSON {
+	return &snapshotJSON{
+		Epoch:      s.Epoch,
+		Number:     s.Number,
+		Hash:       s.Hash,
+		Votes:      s.Votes,
+		Tally:      s.Tally,
+		Validators: s.validators(),
+		Policy:     s.ValSet.Policy().Id,
+	}
+}
+
+// Unmarshal from a json byte array
+func (s *Snapshot) UnmarshalJSON(b []byte) error {
+	var j snapshotJSON
+	if err := json.Unmarshal(b, &j); err != nil {
+		return err
+	}
+
+	s.Epoch = j.Epoch
+	s.Number = j.Number
+	s.Hash = j.Hash
+	s.Votes = j.Votes
+	s.Tally = j.Tally
+
+	// Setting the By function to ValidatorSortByStringFunc should be fine, as the validator do not change only the order changes
+	pp := istanbul.NewProposerPolicyByIdAndSortFunc(j.Policy, istanbul.ValidatorSortByString())
+	s.ValSet = validator.NewSet(j.Validators, pp)
+	return nil
+}
+
+// Marshal to a json byte array
+func (s *Snapshot) MarshalJSON() ([]byte, error) {
+	j := s.toJSONStruct()
+	return json.Marshal(j)
 }

@@ -1,30 +1,22 @@
 package core
 
 import (
-	"bytes"
 	"fmt"
-	"html/template"
-	"io/ioutil"
 	"math/big"
-	"os"
-	osExec "os/exec"
-	"path"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/private"
-	"github.com/ethereum/go-ethereum/private/constellation"
 )
 
 // callmsg is the message type used for call transactions in the private state test
 type callmsg struct {
-	addr          common.Address
-	to            *common.Address
-	gas, gasPrice *big.Int
-	value         *big.Int
-	data          []byte
+	addr     common.Address
+	to       *common.Address
+	gas      uint64
+	gasPrice *big.Int
+	value    *big.Int
+	data     []byte
 }
 
 // accessor boilerplate to implement core.Message
@@ -33,7 +25,7 @@ func (m callmsg) FromFrontier() common.Address { return m.addr }
 func (m callmsg) Nonce() uint64                { return 0 }
 func (m callmsg) To() *common.Address          { return m.to }
 func (m callmsg) GasPrice() *big.Int           { return m.gasPrice }
-func (m callmsg) Gas() *big.Int                { return m.gas }
+func (m callmsg) Gas() uint64                  { return m.gas }
 func (m callmsg) Value() *big.Int              { return m.value }
 func (m callmsg) Data() []byte                 { return m.data }
 func (m callmsg) CheckNonce() bool             { return true }
@@ -72,68 +64,16 @@ func ExampleMakeCallHelper() {
 	fmt.Println("Public:", helper.PublicState.GetState(pubContractAddr, common.Hash{}).Big())
 }
 
-var constellationCfgTemplate = template.Must(template.New("t").Parse(`
-	url = "http://127.0.0.1:9000/"
-	port = 9000
-	socketPath = "{{.RootDir}}/qdata/tm1.ipc"
-	otherNodeUrls = []
-	publicKeyPath = "{{.RootDir}}/keys/tm1.pub"
-	privateKeyPath = "{{.RootDir}}/keys/tm1.key"
-	archivalPublicKeyPath = "{{.RootDir}}/keys/tm1a.pub"
-	archivalPrivateKeyPath = "{{.RootDir}}/keys/tm1a.key"
-	storagePath = "{{.RootDir}}/qdata/constellation1"
-`))
-
-func runConstellation() (*osExec.Cmd, error) {
-	dir, err := ioutil.TempDir("", "TestPrivateTxConstellationData")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(dir)
-	here, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	if err = os.MkdirAll(path.Join(dir, "qdata"), 0755); err != nil {
-		return nil, err
-	}
-	if err = os.Symlink(path.Join(here, "constellation-test-keys"), path.Join(dir, "keys")); err != nil {
-		return nil, err
-	}
-	cfgFile, err := os.Create(path.Join(dir, "constellation.cfg"))
-	if err != nil {
-		return nil, err
-	}
-	err = constellationCfgTemplate.Execute(cfgFile, map[string]string{"RootDir": dir})
-	if err != nil {
-		return nil, err
-	}
-	constellationCmd := osExec.Command("constellation-node", cfgFile.Name())
-	var stdout, stderr bytes.Buffer
-	constellationCmd.Stdout = &stdout
-	constellationCmd.Stderr = &stderr
-	var constellationErr error
-	go func() {
-		constellationErr = constellationCmd.Start()
-	}()
-	// Give the constellation subprocess some time to start.
-	time.Sleep(1 * time.Second)
-	if constellationErr != nil {
-		fmt.Println(stdout.String() + stderr.String())
-		return nil, constellationErr
-	}
-	private.P = constellation.MustNew(cfgFile.Name())
-	return constellationCmd, nil
-}
-
 // 600a600055600060006001a1
-// [1] PUSH1 0x0a (store value)
-// [3] PUSH1 0x00 (store addr)
-// [4] SSTORE
-// [6] PUSH1 0x00
-// [8] PUSH1 0x00
-// [10] PUSH1 0x01
-// [11] LOG1
+// 60 0a, 60 00, 55,  60 00, 60 00, 60 01,  a1
+// [1] (0x60) PUSH1 0x0a (store value)
+// [3] (0x60) PUSH1 0x00 (store addr)
+// [4] (0x55) SSTORE  (Store (k-00,v-a))
+
+// [6] (0x60) PUSH1 0x00
+// [8] (0x60) PUSH1 0x00
+// [10](0x60) PUSH1 0x01
+// [11](0xa1) LOG1 offset(0x01), len(0x00), topic(0x00)
 //
 // Store then log
 func TestPrivateTransaction(t *testing.T) {
@@ -144,25 +84,22 @@ func TestPrivateTransaction(t *testing.T) {
 		publicState  = helper.PublicState
 	)
 
-	constellationCmd, err := runConstellation()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer constellationCmd.Process.Kill()
-
 	prvContractAddr := common.Address{1}
 	pubContractAddr := common.Address{2}
+	// SSTORE (K,V) SSTORE(0, 10): 600a600055
+	// +
+	// LOG1 OFFSET LEN TOPIC,  LOG1 (a1) 01, 00, 00: 600060006001a1
 	privateState.SetCode(prvContractAddr, common.Hex2Bytes("600a600055600060006001a1"))
-	privateState.SetState(prvContractAddr, common.Hash{}, common.Hash{9})
+	// SSTORE (K,V) SSTORE(0, 14): 6014600055
 	publicState.SetCode(pubContractAddr, common.Hex2Bytes("6014600055"))
-	publicState.SetState(pubContractAddr, common.Hash{}, common.Hash{19})
 
 	if publicState.Exist(prvContractAddr) {
 		t.Error("didn't expect private contract address to exist on public state")
 	}
 
 	// Private transaction 1
-	err = helper.MakeCall(true, key, prvContractAddr, nil)
+	err := helper.MakeCall(true, key, prvContractAddr, nil)
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +131,7 @@ func TestPrivateTransaction(t *testing.T) {
 	}
 
 	// Private transaction 2
-	err = helper.MakeCall(true, key, prvContractAddr, nil)
+	helper.MakeCall(true, key, prvContractAddr, nil)
 	stateEntry = privateState.GetState(prvContractAddr, common.Hash{}).Big()
 	if stateEntry.Cmp(big.NewInt(10)) != 0 {
 		t.Error("expected state to have 10, got", stateEntry)

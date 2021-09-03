@@ -18,13 +18,18 @@ package eth
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/bloombits"
+	"github.com/ethereum/go-ethereum/core/mps"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -32,45 +37,84 @@ import (
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
+	pcore "github.com/ethereum/go-ethereum/permission/core"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/jpmorganchase/quorum-security-plugin-sdk-go/proto"
 )
 
-// EthApiBackend implements ethapi.Backend for full nodes
-type EthApiBackend struct {
-	eth *Ethereum
-	gpo *gasprice.Oracle
+// EthAPIBackend implements ethapi.Backend for full nodes
+type EthAPIBackend struct {
+	extRPCEnabled bool
+	eth           *Ethereum
+	gpo           *gasprice.Oracle
+
+	// Quorum
+	//
+	// hex node id from node public key
+	hexNodeId string
+
+	// timeout value for call
+	evmCallTimeOut time.Duration
 }
 
-func (b *EthApiBackend) ChainConfig() *params.ChainConfig {
-	return b.eth.chainConfig
+// ChainConfig returns the active chain configuration.
+func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
+	return b.eth.blockchain.Config()
 }
 
-func (b *EthApiBackend) CurrentBlock() *types.Block {
+// PSMR returns the private state metadata resolver.
+func (b *EthAPIBackend) PSMR() mps.PrivateStateMetadataResolver {
+	return b.eth.blockchain.PrivateStateManager()
+}
+
+func (b *EthAPIBackend) CurrentBlock() *types.Block {
 	return b.eth.blockchain.CurrentBlock()
 }
 
-func (b *EthApiBackend) SetHead(number uint64) {
+func (b *EthAPIBackend) SetHead(number uint64) {
 	b.eth.protocolManager.downloader.Cancel()
 	b.eth.blockchain.SetHead(number)
 }
 
-func (b *EthApiBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error) {
+func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Header, error) {
 	// Pending block is only known by the miner
-	if blockNr == rpc.PendingBlockNumber {
+	if number == rpc.PendingBlockNumber {
 		block := b.eth.miner.PendingBlock()
 		return block.Header(), nil
 	}
 	// Otherwise resolve and return the block
-	if blockNr == rpc.LatestBlockNumber {
+	if number == rpc.LatestBlockNumber {
 		return b.eth.blockchain.CurrentBlock().Header(), nil
 	}
-	return b.eth.blockchain.GetHeaderByNumber(uint64(blockNr)), nil
+	return b.eth.blockchain.GetHeaderByNumber(uint64(number)), nil
 }
 
-func (b *EthApiBackend) BlockByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Block, error) {
+func (b *EthAPIBackend) HeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*types.Header, error) {
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		return b.HeaderByNumber(ctx, blockNr)
+	}
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		header := b.eth.blockchain.GetHeaderByHash(hash)
+		if header == nil {
+			return nil, errors.New("header for hash not found")
+		}
+		if blockNrOrHash.RequireCanonical && b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) != hash {
+			return nil, errors.New("hash is not currently canonical")
+		}
+		return header, nil
+	}
+	return nil, errors.New("invalid arguments; neither block nor hash specified")
+}
+
+func (b *EthAPIBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	return b.eth.blockchain.GetHeaderByHash(hash), nil
+}
+
+func (b *EthAPIBackend) BlockByNumber(ctx context.Context, number rpc.BlockNumber) (*types.Block, error) {
 	// Pending block is only known by the miner
-	if blockNr == rpc.PendingBlockNumber {
+	if number == rpc.PendingBlockNumber {
 		if b.eth.protocolManager.raftMode {
 			// Use latest instead.
 			return b.eth.blockchain.CurrentBlock(), nil
@@ -79,83 +123,203 @@ func (b *EthApiBackend) BlockByNumber(ctx context.Context, blockNr rpc.BlockNumb
 		return block, nil
 	}
 	// Otherwise resolve and return the block
-	if blockNr == rpc.LatestBlockNumber {
+	if number == rpc.LatestBlockNumber {
 		return b.eth.blockchain.CurrentBlock(), nil
 	}
-	return b.eth.blockchain.GetBlockByNumber(uint64(blockNr)), nil
+	return b.eth.blockchain.GetBlockByNumber(uint64(number)), nil
 }
 
-func (b *EthApiBackend) StateAndHeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (vm.MinimalApiState, *types.Header, error) {
+func (b *EthAPIBackend) BlockByHash(ctx context.Context, hash common.Hash) (*types.Block, error) {
+	return b.eth.blockchain.GetBlockByHash(hash), nil
+}
+
+func (b *EthAPIBackend) BlockByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*types.Block, error) {
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		return b.BlockByNumber(ctx, blockNr)
+	}
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		header := b.eth.blockchain.GetHeaderByHash(hash)
+		if header == nil {
+			return nil, errors.New("header for hash not found")
+		}
+		if blockNrOrHash.RequireCanonical && b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) != hash {
+			return nil, errors.New("hash is not currently canonical")
+		}
+		block := b.eth.blockchain.GetBlock(hash, header.Number.Uint64())
+		if block == nil {
+			return nil, errors.New("header found, but block body is missing")
+		}
+		return block, nil
+	}
+	return nil, errors.New("invalid arguments; neither block nor hash specified")
+}
+
+func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.BlockNumber) (vm.MinimalApiState, *types.Header, error) {
+	psm, err := b.PSMR().ResolveForUserContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	// Pending state is only known by the miner
-	if blockNr == rpc.PendingBlockNumber {
+	if number == rpc.PendingBlockNumber {
+		// Quorum
 		if b.eth.protocolManager.raftMode {
 			// Use latest instead.
 			header, err := b.HeaderByNumber(ctx, rpc.LatestBlockNumber)
 			if header == nil || err != nil {
 				return nil, nil, err
 			}
-			publicState, privateState, err := b.eth.BlockChain().StateAt(header.Root)
-			return EthApiState{publicState, privateState}, header, err
+			publicState, privateState, err := b.eth.BlockChain().StateAtPSI(header.Root, psm.ID)
+			return EthAPIState{publicState, privateState}, header, err
 		}
-		block, publicState, privateState := b.eth.miner.Pending()
-		return EthApiState{publicState, privateState}, block.Header(), nil
+		block, publicState, privateState := b.eth.miner.Pending(psm.ID)
+		return EthAPIState{publicState, privateState}, block.Header(), nil
 	}
 	// Otherwise resolve the block number and return its state
-	header, err := b.HeaderByNumber(ctx, blockNr)
-	if header == nil || err != nil {
+	header, err := b.HeaderByNumber(ctx, number)
+	if err != nil {
 		return nil, nil, err
 	}
-	stateDb, privateState, err := b.eth.BlockChain().StateAt(header.Root)
-	return EthApiState{stateDb, privateState}, header, err
+	if header == nil {
+		return nil, nil, errors.New("header not found")
+	}
+	stateDb, privateState, err := b.eth.BlockChain().StateAtPSI(header.Root, psm.ID)
+	return EthAPIState{stateDb, privateState}, header, err
+
 }
 
-func (b *EthApiBackend) GetBlock(ctx context.Context, blockHash common.Hash) (*types.Block, error) {
-	return b.eth.blockchain.GetBlockByHash(blockHash), nil
+func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (vm.MinimalApiState, *types.Header, error) {
+	if blockNr, ok := blockNrOrHash.Number(); ok {
+		return b.StateAndHeaderByNumber(ctx, blockNr)
+	}
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		header, err := b.HeaderByHash(ctx, hash)
+		if err != nil {
+			return nil, nil, err
+		}
+		if header == nil {
+			return nil, nil, errors.New("header for hash not found")
+		}
+		if blockNrOrHash.RequireCanonical && b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) != hash {
+			return nil, nil, errors.New("hash is not currently canonical")
+		}
+		psm, err := b.PSMR().ResolveForUserContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		stateDb, privateState, err := b.eth.BlockChain().StateAtPSI(header.Root, psm.ID)
+		return EthAPIState{stateDb, privateState}, header, err
+
+	}
+	return nil, nil, errors.New("invalid arguments; neither block nor hash specified")
 }
 
-func (b *EthApiBackend) GetReceipts(ctx context.Context, blockHash common.Hash) (types.Receipts, error) {
-	return core.GetBlockReceipts(b.eth.chainDb, blockHash, core.GetBlockNumber(b.eth.chainDb, blockHash)), nil
+// Modified for Quorum:
+// - If MPS is enabled then the list of receipts returned will contain all public receipts, plus the private receipts for this PSI.
+// - if MPS is not enabled, then list will contain all public and private receipts
+// Note that for a privacy marker transactions, the private receipts will remain under PSReceipts
+func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
+	receipts := b.eth.blockchain.GetReceiptsByHash(hash)
+	psm, err := b.PSMR().ResolveForUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	psiReceipts := make([]*types.Receipt, len(receipts))
+	for i := 0; i < len(receipts); i++ {
+		psiReceipts[i] = receipts[i]
+		if receipts[i].PSReceipts != nil {
+			psReceipt, found := receipts[i].PSReceipts[psm.ID]
+			// if PSReceipt found and this is not a privacy marker transaction receipt, then pull out the PSI receipt
+			if found && receipts[i].TxHash == psReceipt.TxHash {
+				psiReceipts[i] = psReceipt
+			}
+		}
+	}
+
+	return psiReceipts, nil
 }
 
-func (b *EthApiBackend) GetTd(blockHash common.Hash) *big.Int {
-	return b.eth.blockchain.GetTdByHash(blockHash)
+func (b *EthAPIBackend) GetLogs(ctx context.Context, hash common.Hash) ([][]*types.Log, error) {
+	receipts, err := b.GetReceipts(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if receipts == nil {
+		return nil, nil
+	}
+	privateReceipts, err := b.eth.blockchain.GetPMTPrivateReceiptsByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	logs := make([][]*types.Log, len(receipts)+len(privateReceipts))
+	for i, receipt := range receipts {
+		logs[i] = receipt.Logs
+	}
+	for i, receipt := range privateReceipts {
+		logs[len(receipts)+i] = receipt.Logs
+	}
+	return logs, nil
 }
 
-func (b *EthApiBackend) GetEVM(ctx context.Context, msg core.Message, state vm.MinimalApiState, header *types.Header, vmCfg vm.Config) (*vm.EVM, func() error, error) {
-	statedb := state.(EthApiState)
-	from := statedb.state.GetOrNewStateObject(msg.From())
-	from.SetBalance(math.MaxBig256)
+func (b *EthAPIBackend) GetTd(ctx context.Context, hash common.Hash) *big.Int {
+	return b.eth.blockchain.GetTdByHash(hash)
+}
+
+func (b *EthAPIBackend) GetEVM(ctx context.Context, msg core.Message, state vm.MinimalApiState, header *types.Header) (*vm.EVM, func() error, error) {
+	statedb := state.(EthAPIState)
 	vmError := func() error { return nil }
 
-	context := core.NewEVMContext(msg, header, b.eth.BlockChain(), nil)
-	return vm.NewEVM(context, statedb.state, statedb.privateState, b.eth.chainConfig, vmCfg), vmError, nil
+	evmCtx := core.NewEVMContext(msg, header, b.eth.BlockChain(), nil)
+
+	// Set the private state to public state if contract address is not present in the private state
+	to := common.Address{}
+	if msg.To() != nil {
+		to = *msg.To()
+	}
+
+	privateState := statedb.privateState
+	if !privateState.Exist(to) {
+		privateState = statedb.state
+	}
+
+	return vm.NewEVM(evmCtx, statedb.state, privateState, b.eth.blockchain.Config(), *b.eth.blockchain.GetVMConfig()), vmError, nil
 }
 
-func (b *EthApiBackend) SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEvent) event.Subscription {
+func (b *EthAPIBackend) SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEvent) event.Subscription {
 	return b.eth.BlockChain().SubscribeRemovedLogsEvent(ch)
 }
 
-func (b *EthApiBackend) SubscribeChainEvent(ch chan<- core.ChainEvent) event.Subscription {
+func (b *EthAPIBackend) SubscribePendingLogsEvent(ch chan<- []*types.Log) event.Subscription {
+	return b.eth.SubscribePendingLogs(ch) // Quorum
+}
+
+func (b *EthAPIBackend) SubscribeChainEvent(ch chan<- core.ChainEvent) event.Subscription {
 	return b.eth.BlockChain().SubscribeChainEvent(ch)
 }
 
-func (b *EthApiBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
+func (b *EthAPIBackend) SubscribeChainHeadEvent(ch chan<- core.ChainHeadEvent) event.Subscription {
 	return b.eth.BlockChain().SubscribeChainHeadEvent(ch)
 }
 
-func (b *EthApiBackend) SubscribeChainSideEvent(ch chan<- core.ChainSideEvent) event.Subscription {
+func (b *EthAPIBackend) SubscribeChainSideEvent(ch chan<- core.ChainSideEvent) event.Subscription {
 	return b.eth.BlockChain().SubscribeChainSideEvent(ch)
 }
 
-func (b *EthApiBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription {
+func (b *EthAPIBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription {
 	return b.eth.BlockChain().SubscribeLogsEvent(ch)
 }
 
-func (b *EthApiBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
+func (b *EthAPIBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
+	// validation for node need to happen here and cannot be done as a part of
+	// validateTx in tx_pool.go as tx_pool validation will happen in every node
+	if b.hexNodeId != "" && !pcore.ValidateNodeForTxn(b.hexNodeId, signedTx.From()) {
+		return errors.New("cannot send transaction from this node")
+	}
 	return b.eth.txPool.AddLocal(signedTx)
 }
 
-func (b *EthApiBackend) GetPoolTransactions() (types.Transactions, error) {
+func (b *EthAPIBackend) GetPoolTransactions() (types.Transactions, error) {
 	pending, err := b.eth.txPool.Pending()
 	if err != nil {
 		return nil, err
@@ -167,92 +331,249 @@ func (b *EthApiBackend) GetPoolTransactions() (types.Transactions, error) {
 	return txs, nil
 }
 
-func (b *EthApiBackend) GetPoolTransaction(hash common.Hash) *types.Transaction {
+func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction {
 	return b.eth.txPool.Get(hash)
 }
 
-func (b *EthApiBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
-	return b.eth.txPool.State().GetNonce(addr), nil
+func (b *EthAPIBackend) GetTransaction(ctx context.Context, txHash common.Hash) (*types.Transaction, common.Hash, uint64, uint64, error) {
+	tx, blockHash, blockNumber, index := rawdb.ReadTransaction(b.eth.ChainDb(), txHash)
+	return tx, blockHash, blockNumber, index, nil
 }
 
-func (b *EthApiBackend) Stats() (pending int, queued int) {
+func (b *EthAPIBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
+	return b.eth.txPool.Nonce(addr), nil
+}
+
+func (b *EthAPIBackend) Stats() (pending int, queued int) {
 	return b.eth.txPool.Stats()
 }
 
-func (b *EthApiBackend) TxPoolContent() (map[common.Address]types.Transactions, map[common.Address]types.Transactions) {
+func (b *EthAPIBackend) TxPoolContent() (map[common.Address]types.Transactions, map[common.Address]types.Transactions) {
 	return b.eth.TxPool().Content()
 }
 
-func (b *EthApiBackend) SubscribeTxPreEvent(ch chan<- core.TxPreEvent) event.Subscription {
-	return b.eth.TxPool().SubscribeTxPreEvent(ch)
+func (b *EthAPIBackend) TxPool() *core.TxPool {
+	return b.eth.TxPool()
 }
 
-func (b *EthApiBackend) Downloader() *downloader.Downloader {
+func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription {
+	return b.eth.TxPool().SubscribeNewTxsEvent(ch)
+}
+
+func (b *EthAPIBackend) Downloader() *downloader.Downloader {
 	return b.eth.Downloader()
 }
 
-func (b *EthApiBackend) ProtocolVersion() int {
+func (b *EthAPIBackend) ProtocolVersion() int {
 	return b.eth.EthVersion()
 }
 
-func (b *EthApiBackend) SuggestPrice(ctx context.Context) (*big.Int, error) {
-	// NOTE(joel): this was set to 0 in the previous version of Quorum
+func (b *EthAPIBackend) SuggestPrice(ctx context.Context) (*big.Int, error) {
 	return b.gpo.SuggestPrice(ctx)
 }
 
-func (b *EthApiBackend) ChainDb() ethdb.Database {
+func (b *EthAPIBackend) ChainDb() ethdb.Database {
 	return b.eth.ChainDb()
 }
 
-func (b *EthApiBackend) EventMux() *event.TypeMux {
+func (b *EthAPIBackend) EventMux() *event.TypeMux {
 	return b.eth.EventMux()
 }
 
-func (b *EthApiBackend) AccountManager() *accounts.Manager {
+func (b *EthAPIBackend) AccountManager() *accounts.Manager {
 	return b.eth.AccountManager()
 }
 
-func (b *EthApiBackend) BloomStatus() (uint64, uint64) {
+func (b *EthAPIBackend) ExtRPCEnabled() bool {
+	return b.extRPCEnabled
+}
+
+func (b *EthAPIBackend) CallTimeOut() time.Duration {
+	return b.evmCallTimeOut
+}
+
+func (b *EthAPIBackend) RPCGasCap() uint64 {
+	return b.eth.config.RPCGasCap
+}
+
+func (b *EthAPIBackend) RPCTxFeeCap() float64 {
+	return b.eth.config.RPCTxFeeCap
+}
+
+func (b *EthAPIBackend) BloomStatus() (uint64, uint64) {
 	sections, _, _ := b.eth.bloomIndexer.Sections()
 	return params.BloomBitsBlocks, sections
 }
 
-func (b *EthApiBackend) ServiceFilter(ctx context.Context, session *bloombits.MatcherSession) {
+func (b *EthAPIBackend) ServiceFilter(ctx context.Context, session *bloombits.MatcherSession) {
 	for i := 0; i < bloomFilterThreads; i++ {
 		go session.Multiplex(bloomRetrievalBatch, bloomRetrievalWait, b.eth.bloomRequests)
 	}
 }
 
-type EthApiState struct {
+func (b *EthAPIBackend) Engine() consensus.Engine {
+	return b.eth.engine
+}
+
+func (b *EthAPIBackend) CurrentHeader() *types.Header {
+	return b.eth.blockchain.CurrentHeader()
+}
+
+func (b *EthAPIBackend) Miner() *miner.Miner {
+	return b.eth.Miner()
+}
+
+func (b *EthAPIBackend) StartMining(threads int) error {
+	return b.eth.StartMining(threads)
+}
+
+// The validation of pre-requisite for multitenancy is done when EthService
+// is being created. So it's safe to use the config value here.
+func (b *EthAPIBackend) SupportsMultitenancy(rpcCtx context.Context) (*proto.PreAuthenticatedAuthenticationToken, bool) {
+	authToken := rpc.PreauthenticatedTokenFromContext(rpcCtx)
+	if authToken != nil && b.eth.config.MultiTenantEnabled() {
+		return authToken, true
+	}
+	return nil, false
+}
+
+func (b *EthAPIBackend) AccountExtraDataStateGetterByNumber(ctx context.Context, number rpc.BlockNumber) (vm.AccountExtraDataStateGetter, error) {
+	s, _, err := b.StateAndHeaderByNumber(ctx, number)
+	return s, err
+}
+
+func (b *EthAPIBackend) IsPrivacyMarkerTransactionCreationEnabled() bool {
+	return b.eth.config.QuorumChainConfig.PrivacyMarkerEnabled() && b.ChainConfig().IsPrivacyPrecompile(b.eth.blockchain.CurrentBlock().Number())
+}
+
+// used by Quorum
+type EthAPIState struct {
 	state, privateState *state.StateDB
 }
 
-func (s EthApiState) GetBalance(addr common.Address) *big.Int {
+func (s EthAPIState) GetBalance(addr common.Address) *big.Int {
 	if s.privateState.Exist(addr) {
 		return s.privateState.GetBalance(addr)
 	}
 	return s.state.GetBalance(addr)
 }
 
-func (s EthApiState) GetCode(addr common.Address) []byte {
+func (s EthAPIState) GetCode(addr common.Address) []byte {
 	if s.privateState.Exist(addr) {
 		return s.privateState.GetCode(addr)
 	}
 	return s.state.GetCode(addr)
 }
 
-func (s EthApiState) GetState(a common.Address, b common.Hash) common.Hash {
+func (s EthAPIState) SetNonce(addr common.Address, nonce uint64) {
+	if s.privateState.Exist(addr) {
+		s.privateState.SetNonce(addr, nonce)
+	} else {
+		s.state.SetNonce(addr, nonce)
+	}
+}
+
+func (s EthAPIState) SetCode(addr common.Address, code []byte) {
+	if s.privateState.Exist(addr) {
+		s.privateState.SetCode(addr, code)
+	} else {
+		s.state.SetCode(addr, code)
+	}
+}
+
+func (s EthAPIState) SetBalance(addr common.Address, balance *big.Int) {
+	if s.privateState.Exist(addr) {
+		s.privateState.SetBalance(addr, balance)
+	} else {
+		s.state.SetBalance(addr, balance)
+	}
+}
+
+func (s EthAPIState) SetStorage(addr common.Address, storage map[common.Hash]common.Hash) {
+	if s.privateState.Exist(addr) {
+		s.privateState.SetStorage(addr, storage)
+	} else {
+		s.state.SetStorage(addr, storage)
+	}
+}
+
+func (s EthAPIState) SetState(a common.Address, key common.Hash, value common.Hash) {
+	if s.privateState.Exist(a) {
+		s.privateState.SetState(a, key, value)
+	} else {
+		s.state.SetState(a, key, value)
+	}
+}
+
+func (s EthAPIState) GetState(a common.Address, b common.Hash) common.Hash {
 	if s.privateState.Exist(a) {
 		return s.privateState.GetState(a, b)
 	}
 	return s.state.GetState(a, b)
 }
 
-func (s EthApiState) GetNonce(addr common.Address) uint64 {
+func (s EthAPIState) GetNonce(addr common.Address) uint64 {
 	if s.privateState.Exist(addr) {
 		return s.privateState.GetNonce(addr)
 	}
 	return s.state.GetNonce(addr)
+}
+
+func (s EthAPIState) GetPrivacyMetadata(addr common.Address) (*state.PrivacyMetadata, error) {
+	if s.privateState.Exist(addr) {
+		return s.privateState.GetPrivacyMetadata(addr)
+	}
+	return nil, fmt.Errorf("%x: %w", addr, common.ErrNotPrivateContract)
+}
+
+func (s EthAPIState) GetManagedParties(addr common.Address) ([]string, error) {
+	if s.privateState.Exist(addr) {
+		return s.privateState.GetManagedParties(addr)
+	}
+	return nil, fmt.Errorf("%x: %w", addr, common.ErrNotPrivateContract)
+}
+
+func (s EthAPIState) GetRLPEncodedStateObject(addr common.Address) ([]byte, error) {
+	getFunc := s.state.GetRLPEncodedStateObject
+	if s.privateState.Exist(addr) {
+		getFunc = s.privateState.GetRLPEncodedStateObject
+	}
+	return getFunc(addr)
+}
+
+func (s EthAPIState) GetProof(addr common.Address) ([][]byte, error) {
+	if s.privateState.Exist(addr) {
+		return s.privateState.GetProof(addr)
+	}
+	return s.state.GetProof(addr)
+}
+
+func (s EthAPIState) GetStorageProof(addr common.Address, h common.Hash) ([][]byte, error) {
+	if s.privateState.Exist(addr) {
+		return s.privateState.GetStorageProof(addr, h)
+	}
+	return s.state.GetStorageProof(addr, h)
+}
+
+func (s EthAPIState) StorageTrie(addr common.Address) state.Trie {
+	if s.privateState.Exist(addr) {
+		return s.privateState.StorageTrie(addr)
+	}
+	return s.state.StorageTrie(addr)
+}
+
+func (s EthAPIState) Error() error {
+	if s.privateState.Error() != nil {
+		return s.privateState.Error()
+	}
+	return s.state.Error()
+}
+
+func (s EthAPIState) GetCodeHash(addr common.Address) common.Hash {
+	if s.privateState.Exist(addr) {
+		return s.privateState.GetCodeHash(addr)
+	}
+	return s.state.GetCodeHash(addr)
 }
 
 //func (s MinimalApiState) Error

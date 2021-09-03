@@ -16,8 +16,6 @@
 
 package istanbul
 
-import "github.com/ethereum/go-ethereum/common"
-
 // RequestEvent is posted to propose a proposal
 type RequestEvent struct {
 	Proposal Proposal
@@ -25,11 +23,10 @@ type RequestEvent struct {
 
 // MessageEvent is posted for Istanbul engine communication
 type MessageEvent struct {
+	Code    uint64
 	Payload []byte
 }
 
 // FinalCommittedEvent is posted when a proposal is committed
 type FinalCommittedEvent struct {
-	Proposal Proposal
-	Proposer common.Address
 }

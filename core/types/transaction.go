@@ -23,10 +23,13 @@ import (
 	"io"
 	"math/big"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/private/engine"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -34,31 +37,39 @@ import (
 
 var (
 	ErrInvalidSig = errors.New("invalid transaction v, r, s values")
-	errNoSigner   = errors.New("missing signing methods")
 )
 
+// Quorum
 // deriveSigner makes a *best* guess about which signer to use.
 func deriveSigner(V *big.Int) Signer {
 	// joel: this is one of the two places we used a wrong signer to print txes
 	if V.Sign() != 0 && isProtectedV(V) {
 		return NewEIP155Signer(deriveChainId(V))
+	} else if isPrivate(V) {
+		return QuorumPrivateTxSigner{}
 	} else {
 		return HomesteadSigner{}
 	}
 }
 
+// End Quorum
+
 type Transaction struct {
-	data txdata
+	data txdata    // Consensus contents of a transaction
+	time time.Time // Time first seen locally (spam avoidance)
+
 	// caches
 	hash atomic.Value
 	size atomic.Value
 	from atomic.Value
+
+	privacyMetadata *PrivacyMetadata
 }
 
 type txdata struct {
 	AccountNonce uint64          `json:"nonce"    gencodec:"required"`
 	Price        *big.Int        `json:"gasPrice" gencodec:"required"`
-	GasLimit     *big.Int        `json:"gas"      gencodec:"required"`
+	GasLimit     uint64          `json:"gas"      gencodec:"required"`
 	Recipient    *common.Address `json:"to"       rlp:"nil"` // nil means contract creation
 	Amount       *big.Int        `json:"value"    gencodec:"required"`
 	Payload      []byte          `json:"input"    gencodec:"required"`
@@ -75,7 +86,7 @@ type txdata struct {
 type txdataMarshaling struct {
 	AccountNonce hexutil.Uint64
 	Price        *hexutil.Big
-	GasLimit     *hexutil.Big
+	GasLimit     hexutil.Uint64
 	Amount       *hexutil.Big
 	Payload      hexutil.Bytes
 	V            *hexutil.Big
@@ -83,15 +94,15 @@ type txdataMarshaling struct {
 	S            *hexutil.Big
 }
 
-func NewTransaction(nonce uint64, to common.Address, amount, gasLimit, gasPrice *big.Int, data []byte) *Transaction {
+func NewTransaction(nonce uint64, to common.Address, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	return newTransaction(nonce, &to, amount, gasLimit, gasPrice, data)
 }
 
-func NewContractCreation(nonce uint64, amount, gasLimit, gasPrice *big.Int, data []byte) *Transaction {
+func NewContractCreation(nonce uint64, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	return newTransaction(nonce, nil, amount, gasLimit, gasPrice, data)
 }
 
-func newTransaction(nonce uint64, to *common.Address, amount, gasLimit, gasPrice *big.Int, data []byte) *Transaction {
+func newTransaction(nonce uint64, to *common.Address, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *Transaction {
 	if len(data) > 0 {
 		data = common.CopyBytes(data)
 	}
@@ -100,7 +111,7 @@ func newTransaction(nonce uint64, to *common.Address, amount, gasLimit, gasPrice
 		Recipient:    to,
 		Payload:      data,
 		Amount:       new(big.Int),
-		GasLimit:     new(big.Int),
+		GasLimit:     gasLimit,
 		Price:        new(big.Int),
 		V:            new(big.Int),
 		R:            new(big.Int),
@@ -109,15 +120,27 @@ func newTransaction(nonce uint64, to *common.Address, amount, gasLimit, gasPrice
 	if amount != nil {
 		d.Amount.Set(amount)
 	}
-	if gasLimit != nil {
-		d.GasLimit.Set(gasLimit)
-	}
 	if gasPrice != nil {
 		d.Price.Set(gasPrice)
 	}
-
-	return &Transaction{data: d}
+	return &Transaction{
+		data: d,
+		time: time.Now(),
+	}
 }
+
+// Quorum
+func NewTxPrivacyMetadata(privacyFlag engine.PrivacyFlagType) *PrivacyMetadata {
+	return &PrivacyMetadata{
+		PrivacyFlag: privacyFlag,
+	}
+}
+
+func (tx *Transaction) SetTxPrivacyMetadata(pm *PrivacyMetadata) {
+	tx.privacyMetadata = pm
+}
+
+// End Quorum
 
 // ChainId returns which chain id this transaction was signed for (if at all)
 func (tx *Transaction) ChainId() *big.Int {
@@ -133,15 +156,13 @@ func isProtectedV(V *big.Int) bool {
 	if V.BitLen() <= 8 {
 		v := V.Uint64()
 		// 27 / 28 are pre eip 155 -- ie unprotected.
-		// TODO(joel): this is a hack. Everywhere else we maintain vanilla ethereum
-		// compatibility and we should figure out how to extend that to here
-		return !(v == 27 || v == 28 || v == 37 || v == 38)
+		return !(v == 27 || v == 28)
 	}
-	// anything not 27 or 28 are considered unprotected
+	// anything not 27 or 28 is considered protected
 	return true
 }
 
-// DecodeRLP implements rlp.Encoder
+// EncodeRLP implements rlp.Encoder
 func (tx *Transaction) EncodeRLP(w io.Writer) error {
 	return rlp.Encode(w, &tx.data)
 }
@@ -152,11 +173,12 @@ func (tx *Transaction) DecodeRLP(s *rlp.Stream) error {
 	err := s.Decode(&tx.data)
 	if err == nil {
 		tx.size.Store(common.StorageSize(rlp.ListSize(size)))
+		tx.time = time.Now()
 	}
-
 	return err
 }
 
+// MarshalJSON encodes the web3 RPC transaction format.
 func (tx *Transaction) MarshalJSON() ([]byte, error) {
 	hash := tx.Hash()
 	data := tx.data
@@ -170,36 +192,56 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 	if err := dec.UnmarshalJSON(input); err != nil {
 		return err
 	}
-	var V byte
-	if isProtectedV(dec.V) {
-		chainId := deriveChainId(dec.V).Uint64()
-		V = byte(dec.V.Uint64() - 35 - 2*chainId)
-	} else {
-		V = byte(dec.V.Uint64() - 27)
+	withSignature := dec.V.Sign() != 0 || dec.R.Sign() != 0 || dec.S.Sign() != 0
+	if withSignature {
+		var V byte
+		if isProtectedV(dec.V) {
+			chainID := deriveChainId(dec.V).Uint64()
+			V = byte(dec.V.Uint64() - 35 - 2*chainID)
+		} else {
+			V = byte(dec.V.Uint64() - 27)
+		}
+		if !crypto.ValidateSignatureValues(V, dec.R, dec.S, false) {
+			return ErrInvalidSig
+		}
 	}
-	if !crypto.ValidateSignatureValues(V, dec.R, dec.S, false) {
-		return ErrInvalidSig
+	*tx = Transaction{
+		data: dec,
+		time: time.Now(),
 	}
-	*tx = Transaction{data: dec}
 	return nil
 }
 
 func (tx *Transaction) Data() []byte       { return common.CopyBytes(tx.data.Payload) }
-func (tx *Transaction) Gas() *big.Int      { return new(big.Int).Set(tx.data.GasLimit) }
+func (tx *Transaction) Gas() uint64        { return tx.data.GasLimit }
 func (tx *Transaction) GasPrice() *big.Int { return new(big.Int).Set(tx.data.Price) }
-func (tx *Transaction) Value() *big.Int    { return new(big.Int).Set(tx.data.Amount) }
-func (tx *Transaction) Nonce() uint64      { return tx.data.AccountNonce }
-func (tx *Transaction) CheckNonce() bool   { return true }
+func (tx *Transaction) GasPriceCmp(other *Transaction) int {
+	return tx.data.Price.Cmp(other.data.Price)
+}
+func (tx *Transaction) GasPriceIntCmp(other *big.Int) int {
+	return tx.data.Price.Cmp(other)
+}
+func (tx *Transaction) Value() *big.Int                   { return new(big.Int).Set(tx.data.Amount) }
+func (tx *Transaction) Nonce() uint64                     { return tx.data.AccountNonce }
+func (tx *Transaction) CheckNonce() bool                  { return true }
+func (tx *Transaction) PrivacyMetadata() *PrivacyMetadata { return tx.privacyMetadata }
 
 // To returns the recipient address of the transaction.
 // It returns nil if the transaction is a contract creation.
 func (tx *Transaction) To() *common.Address {
 	if tx.data.Recipient == nil {
 		return nil
-	} else {
-		to := *tx.data.Recipient
-		return &to
 	}
+	to := *tx.data.Recipient
+	return &to
+}
+
+func (tx *Transaction) From() common.Address {
+	signer := deriveSigner(tx.data.V)
+	if from, err := Sender(signer, tx); err == nil {
+		return from
+	}
+	return common.Address{}
 }
 
 // Hash hashes the RLP encoding of tx.
@@ -213,6 +255,8 @@ func (tx *Transaction) Hash() common.Hash {
 	return v
 }
 
+// Size returns the true RLP encoded storage size of the transaction, either by
+// encoding and returning it, or returning a previsouly cached value.
 func (tx *Transaction) Size() common.StorageSize {
 	if size := tx.size.Load(); size != nil {
 		return size.(common.StorageSize)
@@ -231,8 +275,8 @@ func (tx *Transaction) Size() common.StorageSize {
 func (tx *Transaction) AsMessage(s Signer) (Message, error) {
 	msg := Message{
 		nonce:      tx.data.AccountNonce,
-		price:      new(big.Int).Set(tx.data.Price),
-		gasLimit:   new(big.Int).Set(tx.data.GasLimit),
+		gasLimit:   tx.data.GasLimit,
+		gasPrice:   new(big.Int).Set(tx.data.Price),
 		to:         tx.data.Recipient,
 		amount:     tx.data.Amount,
 		data:       tx.data.Payload,
@@ -246,25 +290,30 @@ func (tx *Transaction) AsMessage(s Signer) (Message, error) {
 }
 
 // WithSignature returns a new transaction with the given signature.
-// This signature needs to be formatted as described in the yellow paper (v+27).
+// This signature needs to be in the [R || S || V] format where V is 0 or 1.
 func (tx *Transaction) WithSignature(signer Signer, sig []byte) (*Transaction, error) {
 	r, s, v, err := signer.SignatureValues(tx, sig)
 	if err != nil {
 		return nil, err
 	}
-	cpy := &Transaction{data: tx.data}
+	cpy := &Transaction{
+		data: tx.data,
+		time: tx.time,
+	}
 	cpy.data.R, cpy.data.S, cpy.data.V = r, s, v
 	return cpy, nil
 }
 
 // Cost returns amount + gasprice * gaslimit.
 func (tx *Transaction) Cost() *big.Int {
-	total := new(big.Int).Mul(tx.data.Price, tx.data.GasLimit)
+	total := new(big.Int).Mul(tx.data.Price, new(big.Int).SetUint64(tx.data.GasLimit))
 	total.Add(total, tx.data.Amount)
 	return total
 }
 
-func (tx *Transaction) RawSignatureValues() (*big.Int, *big.Int, *big.Int) {
+// RawSignatureValues returns the V, R, S signature values of the transaction.
+// The return values should not be modified by the caller.
+func (tx *Transaction) RawSignatureValues() (v, r, s *big.Int) {
 	return tx.data.V, tx.data.R, tx.data.S
 }
 
@@ -320,24 +369,24 @@ func (tx *Transaction) String() string {
 	)
 }
 
-// Transaction slice type for basic sorting.
+// Transactions is a Transaction slice type for basic sorting.
 type Transactions []*Transaction
 
-// Len returns the length of s
+// Len returns the length of s.
 func (s Transactions) Len() int { return len(s) }
 
-// Swap swaps the i'th and the j'th element in s
+// Swap swaps the i'th and the j'th element in s.
 func (s Transactions) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
-// GetRlp implements Rlpable and returns the i'th element of s in rlp
+// GetRlp implements Rlpable and returns the i'th element of s in rlp.
 func (s Transactions) GetRlp(i int) []byte {
 	enc, _ := rlp.EncodeToBytes(s[i])
 	return enc
 }
 
-// Returns a new set t which is the difference between a to b
-func TxDifference(a, b Transactions) (keep Transactions) {
-	keep = make(Transactions, 0, len(a))
+// TxDifference returns a new set which is the difference between a and b.
+func TxDifference(a, b Transactions) Transactions {
+	keep := make(Transactions, 0, len(a))
 
 	remove := make(map[common.Hash]struct{})
 	for _, tx := range b {
@@ -362,19 +411,27 @@ func (s TxByNonce) Len() int           { return len(s) }
 func (s TxByNonce) Less(i, j int) bool { return s[i].data.AccountNonce < s[j].data.AccountNonce }
 func (s TxByNonce) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
-// TxByPrice implements both the sort and the heap interface, making it useful
+// TxByPriceAndTime implements both the sort and the heap interface, making it useful
 // for all at once sorting as well as individually adding and removing elements.
-type TxByPrice Transactions
+type TxByPriceAndTime Transactions
 
-func (s TxByPrice) Len() int           { return len(s) }
-func (s TxByPrice) Less(i, j int) bool { return s[i].data.Price.Cmp(s[j].data.Price) > 0 }
-func (s TxByPrice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+func (s TxByPriceAndTime) Len() int { return len(s) }
+func (s TxByPriceAndTime) Less(i, j int) bool {
+	// If the prices are equal, use the time the transaction was first seen for
+	// deterministic sorting
+	cmp := s[i].data.Price.Cmp(s[j].data.Price)
+	if cmp == 0 {
+		return s[i].time.Before(s[j].time)
+	}
+	return cmp > 0
+}
+func (s TxByPriceAndTime) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
-func (s *TxByPrice) Push(x interface{}) {
+func (s *TxByPriceAndTime) Push(x interface{}) {
 	*s = append(*s, x.(*Transaction))
 }
 
-func (s *TxByPrice) Pop() interface{} {
+func (s *TxByPriceAndTime) Pop() interface{} {
 	old := *s
 	n := len(old)
 	x := old[n-1]
@@ -383,11 +440,11 @@ func (s *TxByPrice) Pop() interface{} {
 }
 
 // TransactionsByPriceAndNonce represents a set of transactions that can return
-// transactions in a profit-maximising sorted order, while supporting removing
+// transactions in a profit-maximizing sorted order, while supporting removing
 // entire batches of transactions for non-executable accounts.
 type TransactionsByPriceAndNonce struct {
 	txs    map[common.Address]Transactions // Per account nonce-sorted list of transactions
-	heads  TxByPrice                       // Next transaction for each unique account (price heap)
+	heads  TxByPriceAndTime                // Next transaction for each unique account (price heap)
 	signer Signer                          // Signer for the set of transactions
 }
 
@@ -397,13 +454,20 @@ type TransactionsByPriceAndNonce struct {
 // Note, the input map is reowned so the caller should not interact any more with
 // if after providing it to the constructor.
 func NewTransactionsByPriceAndNonce(signer Signer, txs map[common.Address]Transactions) *TransactionsByPriceAndNonce {
-	// Initialize a price based heap with the head transactions
-	heads := make(TxByPrice, 0, len(txs))
-	for _, accTxs := range txs {
-		heads = append(heads, accTxs[0])
+	// Initialize a price and received time based heap with the head transactions
+	heads := make(TxByPriceAndTime, 0, len(txs))
+	for from, accTxs := range txs {
 		// Ensure the sender address is from the signer
-		acc, _ := Sender(signer, accTxs[0])
-		txs[acc] = accTxs[1:]
+		acc, err := Sender(signer, accTxs[0])
+		if err == nil {
+			heads = append(heads, accTxs[0])
+			txs[acc] = accTxs[1:]
+		} else {
+			log.Info("Failed to recovered sender address, this transaction is skipped", "from", from, "nonce", accTxs[0].data.AccountNonce, "err", err)
+		}
+		if from != acc {
+			delete(txs, from)
+		}
 	}
 	heap.Init(&heads)
 
@@ -445,23 +509,25 @@ func (t *TransactionsByPriceAndNonce) Pop() {
 //
 // NOTE: In a future PR this will be removed.
 type Message struct {
-	to                      *common.Address
-	from                    common.Address
-	nonce                   uint64
-	amount, price, gasLimit *big.Int
-	data                    []byte
-	checkNonce              bool
-	isPrivate               bool
+	to         *common.Address
+	from       common.Address
+	nonce      uint64
+	amount     *big.Int
+	gasLimit   uint64
+	gasPrice   *big.Int
+	data       []byte
+	checkNonce bool
+	isPrivate  bool
 }
 
-func NewMessage(from common.Address, to *common.Address, nonce uint64, amount, gasLimit, price *big.Int, data []byte, checkNonce bool) Message {
+func NewMessage(from common.Address, to *common.Address, nonce uint64, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte, checkNonce bool) Message {
 	return Message{
 		from:       from,
 		to:         to,
 		nonce:      nonce,
 		amount:     amount,
-		price:      price,
 		gasLimit:   gasLimit,
+		gasPrice:   gasPrice,
 		data:       data,
 		checkNonce: checkNonce,
 	}
@@ -469,15 +535,24 @@ func NewMessage(from common.Address, to *common.Address, nonce uint64, amount, g
 
 func (m Message) From() common.Address { return m.from }
 func (m Message) To() *common.Address  { return m.to }
-func (m Message) GasPrice() *big.Int   { return m.price }
+func (m Message) GasPrice() *big.Int   { return m.gasPrice }
 func (m Message) Value() *big.Int      { return m.amount }
-func (m Message) Gas() *big.Int        { return m.gasLimit }
+func (m Message) Gas() uint64          { return m.gasLimit }
 func (m Message) Nonce() uint64        { return m.nonce }
 func (m Message) Data() []byte         { return m.data }
 func (m Message) CheckNonce() bool     { return m.checkNonce }
 
+// Quorum
 func (m Message) IsPrivate() bool {
 	return m.isPrivate
+}
+
+// overriding msg.data so that when tesseera.receive is invoked we get nothing back
+func (m Message) WithEmptyPrivateData(b bool) Message {
+	if b {
+		m.data = common.EncryptedPayloadHash{}.Bytes()
+	}
+	return m
 }
 
 func (tx *Transaction) IsPrivate() bool {
@@ -487,10 +562,33 @@ func (tx *Transaction) IsPrivate() bool {
 	return tx.data.V.Uint64() == 37 || tx.data.V.Uint64() == 38
 }
 
+/*
+ * Indicates that a transaction is private, but doesn't necessarily set the correct v value, as it can be called on
+ * an unsigned transaction.
+ * pre homestead signer, all v values were v=27 or v=28, with EIP155Signer that change,
+ * but SetPrivate() is also used on unsigned transactions to temporarily set the v value to indicate
+ * the transaction is intended to be private, and so that the correct signer can be selected. The signer will correctly
+ * set the valid v value (37 or 38): This helps minimize changes vs upstream go-ethereum code.
+ */
 func (tx *Transaction) SetPrivate() {
+	if tx.IsPrivate() {
+		return
+	}
 	if tx.data.V.Int64() == 28 {
 		tx.data.V.SetUint64(38)
 	} else {
 		tx.data.V.SetUint64(37)
 	}
 }
+
+func (tx *Transaction) IsPrivacyMarker() bool {
+	return tx.To() != nil && *tx.To() == common.QuorumPrivacyPrecompileContractAddress()
+}
+
+// PrivacyMetadata encapsulates privacy information to be attached
+// to a transaction being processed
+type PrivacyMetadata struct {
+	PrivacyFlag engine.PrivacyFlagType
+}
+
+// End Quorum

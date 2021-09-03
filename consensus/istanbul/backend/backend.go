@@ -18,13 +18,19 @@ package backend
 
 import (
 	"crypto/ecdsa"
+	"math/big"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/istanbul"
-	istanbulCore "github.com/ethereum/go-ethereum/consensus/istanbul/core"
+	istanbulcommon "github.com/ethereum/go-ethereum/consensus/istanbul/common"
+	ibftcore "github.com/ethereum/go-ethereum/consensus/istanbul/ibft/core"
+	ibftengine "github.com/ethereum/go-ethereum/consensus/istanbul/ibft/engine"
+	qbftcore "github.com/ethereum/go-ethereum/consensus/istanbul/qbft/core"
+	qbftengine "github.com/ethereum/go-ethereum/consensus/istanbul/qbft/engine"
+	qbfttypes "github.com/ethereum/go-ethereum/consensus/istanbul/qbft/types"
 	"github.com/ethereum/go-ethereum/consensus/istanbul/validator"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -35,13 +41,19 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 )
 
+const (
+	// fetcherID is the ID indicates the block is from Istanbul engine
+	fetcherID = "istanbul"
+)
+
 // New creates an Ethereum backend for Istanbul core engine.
-func New(config *istanbul.Config, privateKey *ecdsa.PrivateKey, db ethdb.Database) consensus.Istanbul {
+func New(config *istanbul.Config, privateKey *ecdsa.PrivateKey, db ethdb.Database) *Backend {
 	// Allocate the snapshot caches and create the engine
 	recents, _ := lru.NewARC(inmemorySnapshots)
 	recentMessages, _ := lru.NewARC(inmemoryPeers)
 	knownMessages, _ := lru.NewARC(inmemoryMessages)
-	backend := &backend{
+
+	sb := &Backend{
 		config:           config,
 		istanbulEventMux: new(event.TypeMux),
 		privateKey:       privateKey,
@@ -55,29 +67,42 @@ func New(config *istanbul.Config, privateKey *ecdsa.PrivateKey, db ethdb.Databas
 		recentMessages:   recentMessages,
 		knownMessages:    knownMessages,
 	}
-	backend.core = istanbulCore.New(backend, backend.config)
-	return backend
+
+	sb.qbftEngine = qbftengine.NewEngine(sb.config, sb.address, sb.Sign)
+	sb.ibftEngine = ibftengine.NewEngine(sb.config, sb.address, sb.Sign)
+
+	return sb
 }
 
 // ----------------------------------------------------------------------------
 
-type backend struct {
-	config           *istanbul.Config
+type Backend struct {
+	config *istanbul.Config
+
+	privateKey *ecdsa.PrivateKey
+	address    common.Address
+
+	core istanbul.Core
+
+	ibftEngine *ibftengine.Engine
+	qbftEngine *qbftengine.Engine
+
 	istanbulEventMux *event.TypeMux
-	privateKey       *ecdsa.PrivateKey
-	address          common.Address
-	core             istanbulCore.Engine
-	logger           log.Logger
-	db               ethdb.Database
-	chain            consensus.ChainReader
-	inserter         func(types.Blocks) (int, error)
+
+	logger log.Logger
+
+	db ethdb.Database
+
+	chain        consensus.ChainHeaderReader
+	currentBlock func() *types.Block
+	hasBadBlock  func(hash common.Hash) bool
 
 	// the channels for istanbul engine notifications
 	commitCh          chan *types.Block
 	proposedBlockHash common.Hash
 	sealMu            sync.Mutex
 	coreStarted       bool
-	coreMu            sync.Mutex
+	coreMu            sync.RWMutex
 
 	// Current list of candidates we are pushing
 	candidates map[common.Address]bool
@@ -91,32 +116,55 @@ type backend struct {
 
 	recentMessages *lru.ARCCache // the cache of peer's messages
 	knownMessages  *lru.ARCCache // the cache of self messages
+
+	qbftConsensusEnabled bool // qbft consensus
+}
+
+func (sb *Backend) Engine() istanbul.Engine {
+	return sb.EngineForBlockNumber(nil)
+}
+
+func (sb *Backend) EngineForBlockNumber(blockNumber *big.Int) istanbul.Engine {
+	switch {
+	case blockNumber != nil && sb.IsQBFTConsensusAt(blockNumber):
+		return sb.qbftEngine
+	case blockNumber == nil && sb.IsQBFTConsensus():
+		return sb.qbftEngine
+	default:
+		return sb.ibftEngine
+	}
+}
+
+// zekun: HACK
+func (sb *Backend) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
+	return sb.EngineForBlockNumber(parent.Number).CalcDifficulty(chain, time, parent)
 }
 
 // Address implements istanbul.Backend.Address
-func (sb *backend) Address() common.Address {
-	return sb.address
+func (sb *Backend) Address() common.Address {
+	return sb.Engine().Address()
 }
 
 // Validators implements istanbul.Backend.Validators
-func (sb *backend) Validators(proposal istanbul.Proposal) istanbul.ValidatorSet {
+func (sb *Backend) Validators(proposal istanbul.Proposal) istanbul.ValidatorSet {
 	return sb.getValidators(proposal.Number().Uint64(), proposal.Hash())
 }
 
 // Broadcast implements istanbul.Backend.Broadcast
-func (sb *backend) Broadcast(valSet istanbul.ValidatorSet, payload []byte) error {
+func (sb *Backend) Broadcast(valSet istanbul.ValidatorSet, code uint64, payload []byte) error {
 	// send to others
-	sb.Gossip(valSet, payload)
+	sb.Gossip(valSet, code, payload)
 	// send to self
 	msg := istanbul.MessageEvent{
+		Code:    code,
 		Payload: payload,
 	}
 	go sb.istanbulEventMux.Post(msg)
 	return nil
 }
 
-// Broadcast implements istanbul.Backend.Gossip
-func (sb *backend) Gossip(valSet istanbul.ValidatorSet, payload []byte) error {
+// Gossip implements istanbul.Backend.Gossip
+func (sb *Backend) Gossip(valSet istanbul.ValidatorSet, code uint64, payload []byte) error {
 	hash := istanbul.RLPHash(payload)
 	sb.knownMessages.Add(hash, true)
 
@@ -126,7 +174,6 @@ func (sb *backend) Gossip(valSet istanbul.ValidatorSet, payload []byte) error {
 			targets[val.Address()] = true
 		}
 	}
-
 	if sb.broadcaster != nil && len(targets) > 0 {
 		ps := sb.broadcaster.FindPeers(targets)
 		for addr, p := range ps {
@@ -145,32 +192,44 @@ func (sb *backend) Gossip(valSet istanbul.ValidatorSet, payload []byte) error {
 			m.Add(hash, true)
 			sb.recentMessages.Add(addr, m)
 
-			go p.Send(istanbulMsg, payload)
+			if sb.IsQBFTConsensus() {
+				var outboundCode uint64 = istanbulMsg
+				if _, ok := qbfttypes.MessageCodes()[code]; ok {
+					outboundCode = code
+				}
+				go p.SendQBFTConsensus(outboundCode, payload)
+			} else {
+				go p.SendConsensus(istanbulMsg, payload)
+			}
 		}
 	}
 	return nil
 }
 
 // Commit implements istanbul.Backend.Commit
-func (sb *backend) Commit(proposal istanbul.Proposal, seals [][]byte) error {
+func (sb *Backend) Commit(proposal istanbul.Proposal, seals [][]byte, round *big.Int) (err error) {
 	// Check if the proposal is a valid block
-	block := &types.Block{}
 	block, ok := proposal.(*types.Block)
 	if !ok {
-		sb.logger.Error("Invalid proposal, %v", proposal)
-		return errInvalidProposal
+		sb.logger.Error("BFT: invalid block proposal", "proposal", proposal)
+		return istanbulcommon.ErrInvalidProposal
 	}
 
+	// Commit header
 	h := block.Header()
-	// Append seals into extra-data
-	err := writeCommittedSeals(h, seals)
+	err = sb.EngineForBlockNumber(h.Number).CommitHeader(h, seals, round)
 	if err != nil {
-		return err
+		return
 	}
+
+	// Remove ValidatorSet added to ProposerPolicy registry, if not done, the registry keeps increasing size with each block height
+	sb.config.ProposerPolicy.ClearRegistry()
+
 	// update block's header
 	block = block.WithSeal(h)
 
-	sb.logger.Info("Committed", "address", sb.Address(), "hash", proposal.Hash(), "number", proposal.Number().Uint64())
+	sb.logger.Info("BFT: block proposal committed", "author", sb.Address(), "hash", proposal.Hash(), "number", proposal.Number().Uint64())
+
 	// - if the proposed and committed blocks are the same, send the proposed hash
 	//   to commit channel, which is being watched inside the engine.Seal() function.
 	// - otherwise, we try to insert the block.
@@ -180,67 +239,77 @@ func (sb *backend) Commit(proposal istanbul.Proposal, seals [][]byte) error {
 	if sb.proposedBlockHash == block.Hash() {
 		// feed block hash to Seal() and wait the Seal() result
 		sb.commitCh <- block
-		// TODO: how do we check the block is inserted correctly?
 		return nil
-	}
-	// if I'm not a proposer, insert the block directly and broadcast NewCommittedEvent
-	if _, err := sb.inserter(types.Blocks{block}); err != nil && err != core.ErrKnownBlock {
-		return err
 	}
 
 	if sb.broadcaster != nil {
-		go sb.broadcaster.BroadcastBlock(block, false)
+		sb.broadcaster.Enqueue(fetcherID, block)
 	}
+
 	return nil
 }
 
 // EventMux implements istanbul.Backend.EventMux
-func (sb *backend) EventMux() *event.TypeMux {
+func (sb *Backend) EventMux() *event.TypeMux {
 	return sb.istanbulEventMux
 }
 
 // Verify implements istanbul.Backend.Verify
-func (sb *backend) Verify(proposal istanbul.Proposal) (time.Duration, error) {
+func (sb *Backend) Verify(proposal istanbul.Proposal) (time.Duration, error) {
 	// Check if the proposal is a valid block
-	block := &types.Block{}
 	block, ok := proposal.(*types.Block)
 	if !ok {
-		sb.logger.Error("Invalid proposal, %v", proposal)
-		return 0, errInvalidProposal
+		sb.logger.Error("BFT: invalid block proposal", "proposal", proposal)
+		return 0, istanbulcommon.ErrInvalidProposal
 	}
-	// verify the header of proposed block
-	err := sb.VerifyHeader(sb.chain, block.Header(), false)
-	// ignore errEmptyCommittedSeals error because we don't have the committed seals yet
-	if err == nil || err == errEmptyCommittedSeals {
-		return 0, nil
-	} else if err == consensus.ErrFutureBlock {
-		return time.Unix(block.Header().Time.Int64(), 0).Sub(now()), consensus.ErrFutureBlock
+
+	// check bad block
+	if sb.HasBadProposal(block.Hash()) {
+		sb.logger.Warn("BFT: bad block proposal", "proposal", proposal)
+		return 0, core.ErrBlacklistedHash
 	}
-	return 0, err
+
+	header := block.Header()
+	snap, err := sb.snapshot(sb.chain, header.Number.Uint64()-1, header.ParentHash, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	return sb.EngineForBlockNumber(header.Number).VerifyBlockProposal(sb.chain, block, snap.ValSet)
 }
 
 // Sign implements istanbul.Backend.Sign
-func (sb *backend) Sign(data []byte) ([]byte, error) {
-	hashData := crypto.Keccak256([]byte(data))
+func (sb *Backend) Sign(data []byte) ([]byte, error) {
+	hashData := crypto.Keccak256(data)
 	return crypto.Sign(hashData, sb.privateKey)
 }
 
+// SignWithoutHashing implements istanbul.Backend.SignWithoutHashing and signs input data with the backend's private key without hashing the input data
+func (sb *Backend) SignWithoutHashing(data []byte) ([]byte, error) {
+	return crypto.Sign(data, sb.privateKey)
+}
+
 // CheckSignature implements istanbul.Backend.CheckSignature
-func (sb *backend) CheckSignature(data []byte, address common.Address, sig []byte) error {
+func (sb *Backend) CheckSignature(data []byte, address common.Address, sig []byte) error {
 	signer, err := istanbul.GetSignatureAddress(data, sig)
 	if err != nil {
-		log.Error("Failed to get signer address", "err", err)
 		return err
 	}
 	// Compare derived addresses
 	if signer != address {
-		return errInvalidSignature
+		return istanbulcommon.ErrInvalidSignature
 	}
+
 	return nil
 }
 
+// HasPropsal implements istanbul.Backend.HashBlock
+func (sb *Backend) HasPropsal(hash common.Hash, number *big.Int) bool {
+	return sb.chain.GetHeader(hash, number.Uint64()) != nil
+}
+
 // GetProposer implements istanbul.Backend.GetProposer
-func (sb *backend) GetProposer(number uint64) common.Address {
+func (sb *Backend) GetProposer(number uint64) common.Address {
 	if h := sb.chain.GetHeaderByNumber(number); h != nil {
 		a, _ := sb.Author(h)
 		return a
@@ -248,7 +317,15 @@ func (sb *backend) GetProposer(number uint64) common.Address {
 	return common.Address{}
 }
 
-func (sb *backend) getValidators(number uint64, hash common.Hash) istanbul.ValidatorSet {
+// ParentValidators implements istanbul.Backend.GetParentValidators
+func (sb *Backend) ParentValidators(proposal istanbul.Proposal) istanbul.ValidatorSet {
+	if block, ok := proposal.(*types.Block); ok {
+		return sb.getValidators(block.Number().Uint64()-1, block.ParentHash())
+	}
+	return validator.NewSet(nil, sb.config.ProposerPolicy)
+}
+
+func (sb *Backend) getValidators(number uint64, hash common.Hash) istanbul.ValidatorSet {
 	snap, err := sb.snapshot(sb.chain, number, hash, nil)
 	if err != nil {
 		return validator.NewSet(nil, sb.config.ProposerPolicy)
@@ -256,24 +333,103 @@ func (sb *backend) getValidators(number uint64, hash common.Hash) istanbul.Valid
 	return snap.ValSet
 }
 
-func (sb *backend) LastProposal() (istanbul.Proposal, common.Address) {
-	if sb.chain == nil {
-		sb.logger.Error("Failed to access blockchain")
-		return nil, common.Address{}
-	}
-
-	h := sb.chain.CurrentHeader()
+func (sb *Backend) LastProposal() (istanbul.Proposal, common.Address) {
+	block := sb.currentBlock()
 
 	var proposer common.Address
-	if h.Number.Cmp(common.Big0) > 0 {
+	if block.Number().Cmp(common.Big0) > 0 {
 		var err error
-		proposer, err = sb.Author(h)
+		proposer, err = sb.Author(block.Header())
 		if err != nil {
-			sb.logger.Error("Failed to get block proposer", "err", err)
+			sb.logger.Error("BFT: last block proposal invalid", "err", err)
 			return nil, common.Address{}
 		}
 	}
 
 	// Return header only block here since we don't need block body
-	return types.NewBlockWithHeader(h), proposer
+	return block, proposer
+}
+
+func (sb *Backend) HasBadProposal(hash common.Hash) bool {
+	if sb.hasBadBlock == nil {
+		return false
+	}
+	return sb.hasBadBlock(hash)
+}
+
+func (sb *Backend) Close() error {
+	return nil
+}
+
+// IsQBFTConsensus returns whether qbft consensus should be used
+func (sb *Backend) IsQBFTConsensus() bool {
+	if sb.qbftConsensusEnabled {
+		return true
+	}
+	if sb.chain != nil {
+		return sb.IsQBFTConsensusAt(sb.chain.CurrentHeader().Number)
+	}
+	return false
+}
+
+// IsQBFTConsensusForHeader checks if qbft consensus is enabled for the block height identified by the given header
+func (sb *Backend) IsQBFTConsensusAt(blockNumber *big.Int) bool {
+	return sb.config.IsQBFTConsensusAt(blockNumber)
+}
+
+func (sb *Backend) startIBFT() error {
+	sb.logger.Info("BFT: activate IBFT")
+	sb.logger.Trace("BFT: set ProposerPolicy sorter to ValidatorSortByStringFun")
+	sb.config.ProposerPolicy.Use(istanbul.ValidatorSortByString())
+	sb.qbftConsensusEnabled = false
+
+	sb.core = ibftcore.New(sb, sb.config)
+	if err := sb.core.Start(); err != nil {
+		sb.logger.Error("BFT: failed to activate IBFT", "err", err)
+		return err
+	}
+
+	return nil
+}
+
+func (sb *Backend) startQBFT() error {
+	sb.logger.Info("BFT: activate QBFT")
+	sb.logger.Trace("BFT: set ProposerPolicy sorter to ValidatorSortByByteFunc")
+	sb.config.ProposerPolicy.Use(istanbul.ValidatorSortByByte())
+	sb.qbftConsensusEnabled = true
+
+	sb.core = qbftcore.New(sb, sb.config)
+	if err := sb.core.Start(); err != nil {
+		sb.logger.Error("BFT: failed to activate QBFT", "err", err)
+		return err
+	}
+
+	return nil
+}
+
+func (sb *Backend) stop() error {
+	core := sb.core
+	sb.core = nil
+
+	if core != nil {
+		sb.logger.Info("BFT: deactivate")
+		if err := core.Stop(); err != nil {
+			sb.logger.Error("BFT: failed to deactivate", "err", err)
+			return err
+		}
+	}
+
+	sb.qbftConsensusEnabled = false
+
+	return nil
+}
+
+// StartQBFTConsensus stops existing legacy ibft consensus and starts the new qbft consensus
+func (sb *Backend) StartQBFTConsensus() error {
+	sb.logger.Info("BFT: switch from IBFT to QBFT")
+	if err := sb.stop(); err != nil {
+		return err
+	}
+
+	return sb.startQBFT()
 }
