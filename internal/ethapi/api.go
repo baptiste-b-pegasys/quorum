@@ -912,12 +912,6 @@ func (args *CallArgs) ToMessage(globalGasCap uint64) types.Message {
 		value = args.Value.ToInt()
 	}
 
-	// NOTE(joel): let's keep the default gas price 0 for now, but note this as a
-	// spot that might be tweaked in the future.
-	/*if gasPrice.Sign() == 0 && !s.b.ChainConfig().IsQuorum {
-		gasPrice = new(big.Int).SetUint64(defaultGasPrice)
-	}*/
-
 	var data []byte
 	if args.Data != nil {
 		data = *args.Data

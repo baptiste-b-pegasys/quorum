@@ -370,7 +370,6 @@ func (b *EthAPIBackend) ProtocolVersion() int {
 }
 
 func (b *EthAPIBackend) SuggestPrice(ctx context.Context) (*big.Int, error) {
-	// NOTE(joel): this was set to 0 in the previous version of Quorum
 	return b.gpo.SuggestPrice(ctx)
 }
 
