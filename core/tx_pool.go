@@ -33,6 +33,8 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	pcore "github.com/ethereum/go-ethereum/permission/core"
+	"github.com/ethereum/go-ethereum/private"
 )
 
 const (
@@ -81,6 +83,8 @@ var (
 	// than some meaningful limit a user might use. This is not a consensus error
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
+
+	//ErrInvalidGasPrice = errors.New("Gas price not 0")
 
 	// ErrEtherValueUnsupported is returned if a transaction specifies an Ether Value
 	// for a private Quorum transaction.
@@ -166,7 +170,7 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	Journal:   "transactions.rlp",
 	Rejournal: time.Hour,
 
-	PriceLimit: 1,
+	PriceLimit: 0,
 	PriceBump:  10,
 
 	AccountSlots: 16,
@@ -531,9 +535,13 @@ func (pool *TxPool) local() map[common.Address]types.Transactions {
 // validateTx checks whether a transaction is valid according to the consensus
 // rules and adheres to some heuristic limits of the local node (price and size).
 func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
-	// Heuristic limit, reject transactions over 32KB to prevent DOS attacks
-	// UPDATED to 64KB to support the deployment of bigger contract due to the pressing need for sophisticated/complex contract in financial/capital markets - Nathan Aw
-	if tx.Size() > 64*1024 {
+	// Quorum
+	sizeLimit := pool.chainconfig.TransactionSizeLimit
+	if sizeLimit == 0 {
+		sizeLimit = DefaultTxPoolConfig.TransactionSizeLimit
+	}
+	// Reject transactions over 64KB (or manually set limit) to prevent DOS attacks
+	if float64(tx.Size()) > float64(sizeLimit*1024) {
 		return ErrOversizedData
 	}
 	// /Quorum
@@ -552,9 +560,28 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if err != nil {
 		return ErrInvalidSender
 	}
+	if pool.chainconfig.IsQuorum {
+		// Quorum
+		if tx.IsPrivacyMarker() {
+			innerTx, _, _, _ := private.FetchPrivateTransaction(tx.Data())
+			if innerTx != nil {
+				if err := pool.validateTx(innerTx, local); err != nil {
+					return err
+				}
+			}
+		}
+		// Ether value is not currently supported on private transactions
+		if tx.IsPrivate() && (len(tx.Data()) == 0 || tx.Value().Sign() != 0) {
+			return ErrEtherValueUnsupported
+		}
+		// Quorum - check if the sender account is authorized to perform the transaction
+		if err := pcore.CheckAccountPermission(tx.From(), tx.To(), tx.Value(), tx.Data(), tx.Gas(), tx.GasPrice()); err != nil {
+			return err
+		}
+	}
 	// Drop non-local transactions under our own minimal accepted gas price
 	local = local || pool.locals.contains(from) // account may be local even if the transaction arrived from the network
-	if !local && pool.gasPrice.Cmp(tx.GasPrice()) > 0 {
+	if !local && tx.GasPriceIntCmp(pool.gasPrice) < 0 {
 		return ErrUnderpriced
 	}
 	// Ensure the transaction adheres to nonce ordering
@@ -1224,10 +1251,17 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 			pool.all.Remove(hash)
 		}
 		// Drop all transactions that are too costly (low balance or out of gas)
-		drops, _ := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
-		for _, tx := range drops {
-			hash := tx.Hash()
-			pool.all.Remove(hash)
+		var drops types.Transactions
+		if !isQuorum {
+			log.Trace("Removed old queued transactions", "count", len(forwards))
+			// Drop all transactions that are too costly (low balance or out of gas)
+			drops, _ := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
+			for _, tx := range drops {
+				hash := tx.Hash()
+				pool.all.Remove(hash)
+			}
+			log.Trace("Removed unpayable queued transactions", "count", len(drops))
+			queuedNofundsMeter.Mark(int64(len(drops)))
 		}
 		log.Trace("Removed unpayable queued transactions", "count", len(drops))
 		queuedNofundsMeter.Mark(int64(len(drops)))
