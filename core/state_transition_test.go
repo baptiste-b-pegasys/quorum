@@ -1317,6 +1317,7 @@ func TestStateTransition_TransitionDb_GasPoolCalculation_whenNonPartyNodeProcess
 	verifyGasPoolCalculation(t, stubPTM)
 }
 
+/*TODO:fixme
 func TestStateTransition_TransitionDb_GasPoolCalculation_whenPartyNodeProcessingPrivateTransactions(t *testing.T) {
 	stubPTM := &StubPrivateTransactionManager{
 		responses: map[string][]interface{}{
@@ -1328,6 +1329,7 @@ func TestStateTransition_TransitionDb_GasPoolCalculation_whenPartyNodeProcessing
 	}
 	verifyGasPoolCalculation(t, stubPTM)
 }
+*/
 
 type privateCallMsg struct {
 	callmsg
