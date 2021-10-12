@@ -298,6 +298,12 @@ func (e *Engine) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 // Note, the block header and state database might be updated to reflect any
 // consensus rules that happen at finalization (e.g. block rewards).
 func (e *Engine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) {
+	cfg := chain.Config()
+	account := cfg.MiningBeneficiary
+	reward := cfg.MiningReward
+	if account != nil && reward != nil && reward.Cmp(big.NewInt(0)) > 0 {
+		state.AddBalance(*account, reward)
+	}
 	// No block rewards in Istanbul, so the state remains as is and uncles are dropped
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 	header.UncleHash = nilUncleHash
@@ -306,10 +312,7 @@ func (e *Engine) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
 func (e *Engine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
-	/// No block rewards in Istanbul, so the state remains as is and uncles are dropped
-	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
-	header.UncleHash = nilUncleHash
-
+	e.Finalize(chain, header, state, txs, uncles)
 	// Assemble and return the final block for sealing
 	return types.NewBlock(header, txs, nil, receipts, new(trie.Trie)), nil
 }
