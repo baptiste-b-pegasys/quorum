@@ -26,8 +26,8 @@ const (
 	VersionPatch = 0        // Patch version component of the current release
 	VersionMeta  = "stable" // Version metadata to append to the version string
 
-	QuorumVersionMajor = 21
-	QuorumVersionMinor = 10
+	QuorumVersionMajor = 22
+	QuorumVersionMinor = 1
 	QuorumVersionPatch = 0
 )
 
