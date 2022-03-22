@@ -69,7 +69,7 @@ require (
 	github.com/tyler-smith/go-bip39 v1.0.1-0.20181017060643-dbb3b84ba2ef
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
 	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c
-	golang.org/x/text v0.3.3
+	golang.org/x/text v0.3.7
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
 	google.golang.org/grpc v1.29.1
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127
