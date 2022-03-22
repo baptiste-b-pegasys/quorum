@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -149,6 +150,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		if config.QuorumChainConfig.PrivacyMarkerEnabled() && chainConfig.PrivacyPrecompileBlock == nil {
 			return nil, errors.New("Privacy marker transactions require privacyPrecompileBlock to be set in genesis.json")
 		}
+		if chainConfig.Istanbul != nil && (chainConfig.IBFT != nil || chainConfig.QBFT != nil) {
+			return nil, errors.New("the attributes config.Istanbul and config.[IBFT|QBFT] are mutually exclusive on the genesis file")
+		}
+		if chainConfig.IBFT != nil && chainConfig.QBFT != nil {
+			return nil, errors.New("the attributes config.IBFT and config.QBFT are mutually exclusive on the genesis file")
+		}
 	}
 
 	if !rawdb.GetIsQuorumEIP155Activated(chainDb) && chainConfig.ChainID != nil {
@@ -226,8 +233,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			TrieTimeLimit:       config.TrieTimeout,
 			SnapshotLimit:       config.SnapshotCache,
 			Preimages:           config.Preimages,
-			// Quorum
-			PrivateTrieCleanJournal: stack.ResolvePath(config.PrivateTrieCleanCacheJournal),
 		}
 	)
 	newBlockChainFunc := core.NewBlockChain
@@ -238,6 +243,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("panic occurred", "err", p)
+			err := eth.Stop()
+			if err != nil {
+				log.Error("error while closing", "err", err)
+			}
+			os.Exit(1)
+		}
+	}()
 	// Rewind the chain in case of an incompatible config upgrade.
 	if compat, ok := genesisErr.(*params.ConfigCompatError); ok {
 		log.Warn("Rewinding chain to upgrade configuration", "err", compat)
