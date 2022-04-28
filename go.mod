@@ -1,4 +1,4 @@
-module github.com/ethereum/go-ethereum/v22
+module github.com/baptiste-b-pegasys/quorum/v22
 
 go 1.15
 
