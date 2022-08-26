@@ -32,7 +32,7 @@ jobs:
           tags: ${{ steps.extract.outputs.image_tag }}, ${{ steps.extract.outputs.image_tag_minor_latest }}, latest
           add_git_labels: true
   arm-docker:
-    name: Build and Publish ARM Docker Image
+    name: Publish ARM Docker Image
     runs-on: ubuntu-20.04
     steps:
       - name: 'Check out project files'
@@ -54,9 +54,8 @@ jobs:
         run: |
           output_dir=${{ runner.temp }}/docker
           mkdir -p $output_dir
-          echo "${{ secrets.DOCKER_ACCESS_TOKEN }}" > docker login -u ${{ secrets.DOCKER_USERNAME }}
-          docker buildx build --platform linux/arm64 -t ${{ secrets.DOCKER_REPO }}/quorum:latest -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag }} -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag_minor_latest }} .
-          docker push --all-tags ${{ secrets.DOCKER_REPO }}/quorum
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_ACCESS_TOKEN }}
+          docker buildx build --push --platform linux/arm64 -t ${{ secrets.DOCKER_REPO }}/quorum:latest -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag }} -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag_minor_latest }} .
   build-binary:
     name: 'Build binary for ${{ matrix.os }}'
     strategy:
