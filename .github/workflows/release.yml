@@ -51,7 +51,6 @@ jobs:
           docker buildx build --output "type=image,push=false" --platform linux/arm64 -t ${{ secrets.DOCKER_REPO }}/quorum .
       - name: 'Publish ARM image to Docker Hub'
         uses: docker/build-push-action@v1
-        id: build
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
