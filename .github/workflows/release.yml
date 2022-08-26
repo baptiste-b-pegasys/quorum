@@ -43,7 +43,14 @@ jobs:
       # https://github.com/docker/setup-buildx-action
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      - name: 'Build and publish ARM image to Docker Hub'
+      - name: 'Build ARM image to Docker Hub'
+        id: build
+        run: |
+          output_dir=${{ runner.temp }}/docker
+          mkdir -p $output_dir
+          docker buildx build --output "type=image,push=false" --platform linux/arm64 -t ${{ secrets.DOCKER_REPO }}/quorum .
+      - name: 'Publish ARM image to Docker Hub'
+        uses: docker/build-push-action@v1
         id: build
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -51,10 +58,6 @@ jobs:
           repository: ${{ secrets.DOCKER_REPO }}
           tags: ${{ steps.extract.outputs.image_tag }}, ${{ steps.extract.outputs.image_tag_minor_latest }}, latest
           add_git_labels: true
-        run: |
-          output_dir=${{ runner.temp }}/docker
-          mkdir -p $output_dir
-          docker buildx build --output "type=image,push=true" --platform linux/arm64 -t quorumengineering/quorum .
   build-binary:
     name: 'Build binary for ${{ matrix.os }}'
     strategy:
