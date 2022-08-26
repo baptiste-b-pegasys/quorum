@@ -55,7 +55,8 @@ jobs:
           output_dir=${{ runner.temp }}/docker
           mkdir -p $output_dir
           echo "${{ secrets.DOCKER_ACCESS_TOKEN }}" > docker login -u ${{ secrets.DOCKER_USERNAME }}
-          docker buildx build --output "type=image,push=true" --platform linux/arm64 -t ${{ secrets.DOCKER_REPO }}/quorum:latest -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag }} -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag_minor_latest }} .
+          docker buildx build --platform linux/arm64 -t ${{ secrets.DOCKER_REPO }}/quorum:latest -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag }} -t ${{ secrets.DOCKER_REPO }}/quorum:${{ steps.extract.outputs.image_tag_minor_latest }} .
+          docker push --all-tags ${{ secrets.DOCKER_REPO }}/quorum
   build-binary:
     name: 'Build binary for ${{ matrix.os }}'
     strategy:
