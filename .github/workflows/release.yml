@@ -34,6 +34,7 @@ jobs:
   arm-docker:
     name: Build and Publish ARM Docker Image
     runs-on: ubuntu-20.04
+    steps:
       - name: 'Check out project files'
         uses: actions/checkout@v3
       # https://github.com/docker/setup-qemu-action
