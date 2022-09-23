@@ -117,6 +117,11 @@ type Peer struct {
 	// events receives message send / receive events if set
 	events   *event.Feed
 	testPipe *MsgPipeRW // for testing
+
+	// Quorum
+	testPipe            *MsgPipeRW // for testing
+	EthPeerRegistered   chan struct{}
+	EthPeerDisconnected chan struct{}
 }
 
 // NewPeer returns a peer for testing purposes.
@@ -203,6 +208,14 @@ func (p *Peer) Disconnect(reason DiscReason) {
 	case p.disc <- reason:
 	case <-p.closed:
 	}
+
+	// Quorum
+	// if a quorum eth service subprotocol is waiting on EthPeerRegistered, notify the peer that it was not registered.
+	select {
+	case p.EthPeerDisconnected <- struct{}{}:
+	default:
+	}
+	// Quorum
 }
 
 // String implements fmt.Stringer.
@@ -226,6 +239,9 @@ func newPeer(log log.Logger, conn *conn, protocols []Protocol) *Peer {
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
 		log:      log.New("id", conn.node.ID(), "conn", conn.flags),
+		// Quorum
+		EthPeerRegistered:   make(chan struct{}, 1),
+		EthPeerDisconnected: make(chan struct{}, 1),
 	}
 	return p
 }
@@ -526,4 +542,15 @@ func (p *Peer) Info() *PeerInfo {
 		info.Protocols[proto.Name] = protoInfo
 	}
 	return info
+}
+
+// Quorum
+
+// NewPeerPipe creates a peer for testing purposes.
+// The message pipe given as the last parameter is closed when
+// Disconnect is called on the peer.
+func NewPeerPipe(id enode.ID, name string, caps []Cap, pipe *MsgPipeRW) *Peer {
+	p := NewPeer(id, name, caps)
+	p.testPipe = pipe
+	return p
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/mps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -57,6 +58,8 @@ type testBackend struct {
 	chaindb     ethdb.Database
 	chain       *core.BlockChain
 }
+
+var _ Backend = &testBackend{}
 
 func newTestBackend(t *testing.T, n int, gspec *core.Genesis, generator func(i int, b *core.BlockGen)) *testBackend {
 	backend := &testBackend{
@@ -138,25 +141,33 @@ func (b *testBackend) ChainDb() ethdb.Database {
 	return b.chaindb
 }
 
-func (b *testBackend) StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, checkLive bool) (*state.StateDB, error) {
-	statedb, err := b.chain.StateAt(block.Root())
+func (b *testBackend) StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, checkLive bool) (*state.StateDB, mps.PrivateStateRepository, error) {
+	statedb, privateStateRepo, err := b.chain.StateAt(block.Root())
 	if err != nil {
-		return nil, errStateNotFound
+		return nil, nil, errStateNotFound
 	}
-	return statedb, nil
+	return statedb, privateStateRepo, nil
 }
 
-func (b *testBackend) StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (core.Message, vm.BlockContext, *state.StateDB, error) {
+func (b *testBackend) StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (core.Message, vm.BlockContext, *state.StateDB, *state.StateDB, mps.PrivateStateRepository, error) {
 	parent := b.chain.GetBlock(block.ParentHash(), block.NumberU64()-1)
 	if parent == nil {
-		return nil, vm.BlockContext{}, nil, errBlockNotFound
+		return nil, vm.BlockContext{}, nil, nil, nil, errBlockNotFound
 	}
-	statedb, err := b.chain.StateAt(parent.Root())
+	statedb, privateStateRepo, err := b.chain.StateAt(parent.Root())
 	if err != nil {
-		return nil, vm.BlockContext{}, nil, errStateNotFound
+		return nil, vm.BlockContext{}, nil, nil, nil, errStateNotFound
+	}
+	psm, err := b.chain.PrivateStateManager().ResolveForUserContext(ctx)
+	if err != nil {
+		return nil, vm.BlockContext{}, nil, nil, nil, err
+	}
+	privateState, err := privateStateRepo.StatePSI(psm.ID)
+	if err != nil {
+		return nil, vm.BlockContext{}, nil, nil, nil, errStateNotFound
 	}
 	if txIndex == 0 && len(block.Transactions()) == 0 {
-		return nil, vm.BlockContext{}, statedb, nil
+		return nil, vm.BlockContext{}, statedb, privateState, privateStateRepo, nil
 	}
 	// Recompute transactions up to the target index.
 	signer := types.MakeSigner(b.chainConfig, block.Number())
@@ -165,15 +176,15 @@ func (b *testBackend) StateAtTransaction(ctx context.Context, block *types.Block
 		txContext := core.NewEVMTxContext(msg)
 		context := core.NewEVMBlockContext(block.Header(), b.chain, nil)
 		if idx == txIndex {
-			return msg, context, statedb, nil
+			return msg, context, statedb, privateState, privateStateRepo, nil
 		}
-		vmenv := vm.NewEVM(context, txContext, statedb, b.chainConfig, vm.Config{})
+		vmenv := vm.NewEVM(context, txContext, statedb, privateState, b.chainConfig, vm.Config{})
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
-			return nil, vm.BlockContext{}, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
+			return nil, vm.BlockContext{}, nil, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}
 		statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
 	}
-	return nil, vm.BlockContext{}, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
+	return nil, vm.BlockContext{}, nil, nil, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
 }
 
 func TestTraceCall(t *testing.T) {
@@ -285,6 +296,14 @@ func TestTraceCall(t *testing.T) {
 		},
 	}
 	for _, testspec := range testSuite {
+		/* TODO:bbo merge
+		tc := &TraceCallConfig{}
+		if testspec.config != nil {
+			tc.LogConfig = testspec.config.LogConfig
+			tc.Tracer = testspec.config.Tracer
+			tc.Timeout = testspec.config.Timeout
+			tc.Reexec = testspec.config.Reexec
+		}*/
 		result, err := api.TraceCall(context.Background(), testspec.call, rpc.BlockNumberOrHash{BlockNumber: &testspec.blockNumber}, testspec.config)
 		if testspec.expectErr != nil {
 			if err == nil {
@@ -329,11 +348,7 @@ func TestOverridenTraceCall(t *testing.T) {
 
 	var testSuite = []struct {
 		blockNumber rpc.BlockNumber
-		call        ethapi.TransactionArgs
 		config      *TraceCallConfig
-		expectErr   error
-		expect      *callTrace
-	}{
 		// Succcessful call with state overriding
 		{
 			blockNumber: rpc.PendingBlockNumber,

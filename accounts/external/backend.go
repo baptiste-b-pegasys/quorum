@@ -210,6 +210,8 @@ func (api *ExternalSigner) SignTx(account accounts.Account, tx *types.Transactio
 		Gas:   hexutil.Uint64(tx.Gas()),
 		To:    to,
 		From:  common.NewMixedcaseAddress(account.Address),
+		// Quorum
+		IsPrivate: tx.IsPrivate(),
 	}
 	if tx.GasFeeCap() != nil {
 		args.MaxFeePerGas = (*hexutil.Big)(tx.GasFeeCap())

@@ -67,7 +67,7 @@ func TestSimulatedBackend(t *testing.T) {
 	tx := types.NewContractCreation(0, big.NewInt(0), gas, gasPrice, common.FromHex(code))
 	tx, _ = types.SignTx(tx, types.HomesteadSigner{}, key)
 
-	err = sim.SendTransaction(context.Background(), tx)
+	err = sim.SendTransaction(context.Background(), tx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Fatal("error sending transaction")
 	}
@@ -82,7 +82,7 @@ func TestSimulatedBackend(t *testing.T) {
 	}
 
 	sim.Commit()
-	_, isPending, err = sim.TransactionByHash(context.Background(), txHash)
+	tx, isPending, err = sim.TransactionByHash(context.Background(), txHash)
 	if err != nil {
 		t.Fatalf("error getting transaction with hash: %v", txHash.String())
 	}
@@ -133,7 +133,7 @@ func TestNewSimulatedBackend(t *testing.T) {
 		t.Errorf("expected sim blockchain config to equal params.AllEthashProtocolChanges, got %v", sim.config)
 	}
 
-	stateDB, _ := sim.blockchain.State()
+	stateDB, _, _ := sim.blockchain.State()
 	bal := stateDB.GetBalance(testAddr)
 	if bal.Cmp(expectedBal) != 0 {
 		t.Errorf("expected balance for test address not received. expected: %v actual: %v", expectedBal, bal)
@@ -170,7 +170,10 @@ func TestNewAdjustTimeFail(t *testing.T) {
 	if err != nil {
 		t.Errorf("could not sign tx: %v", err)
 	}
-	sim.SendTransaction(context.Background(), signedTx)
+	err = sim.SendTransaction(context.Background(), signedTx, bind.PrivateTxArgs{})
+	if err != nil {
+		t.Error("Handled an error")
+	}
 	// AdjustTime should fail on non-empty block
 	if err := sim.AdjustTime(time.Second); err == nil {
 		t.Error("Expected adjust time to error on non-empty block")
@@ -191,7 +194,10 @@ func TestNewAdjustTimeFail(t *testing.T) {
 	if err != nil {
 		t.Errorf("could not sign tx: %v", err)
 	}
-	sim.SendTransaction(context.Background(), signedTx2)
+	err = sim.SendTransaction(context.Background(), signedTx2, bind.PrivateTxArgs{})
+	if err != nil {
+		t.Error("Handled an error")
+	}
 	sim.Commit()
 	newTime = sim.pendingBlock.Time()
 	if newTime-prevTime >= uint64(time.Minute.Seconds()) {
@@ -299,7 +305,7 @@ func TestNonceAt(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}
@@ -343,7 +349,7 @@ func TestSendTransaction(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}
@@ -381,7 +387,7 @@ func TestTransactionByHash(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}
@@ -696,7 +702,7 @@ func TestTransactionCount(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}
@@ -753,7 +759,7 @@ func TestTransactionInBlock(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}
@@ -811,7 +817,7 @@ func TestPendingNonceAt(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}
@@ -832,7 +838,7 @@ func TestPendingNonceAt(t *testing.T) {
 	if err != nil {
 		t.Errorf("could not sign tx: %v", err)
 	}
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not send tx: %v", err)
 	}
@@ -866,7 +872,7 @@ func TestTransactionReceipt(t *testing.T) {
 	}
 
 	// send tx to simulated backend
-	err = sim.SendTransaction(bgCtx, signedTx)
+	err = sim.SendTransaction(bgCtx, signedTx, bind.PrivateTxArgs{})
 	if err != nil {
 		t.Errorf("could not add tx to pending block: %v", err)
 	}

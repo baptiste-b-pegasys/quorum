@@ -491,7 +491,7 @@ func testGetNodeData(t *testing.T, protocol uint) {
 		trie, _ := state.New(backend.chain.GetBlockByNumber(i).Root(), state.NewDatabase(statedb), nil)
 
 		for j, acc := range accounts {
-			state, _ := backend.chain.State()
+			state, _, _ := backend.chain.State()
 			bw := state.GetBalance(acc)
 			bh := trie.GetBalance(acc)
 

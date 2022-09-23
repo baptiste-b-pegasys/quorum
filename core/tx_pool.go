@@ -27,12 +27,15 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/prque"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core/mps"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	pcore "github.com/ethereum/go-ethereum/permission/core"
+	"github.com/ethereum/go-ethereum/private"
 )
 
 const (
@@ -49,7 +52,8 @@ const (
 	// non-trivial consequences: larger transactions are significantly harder and
 	// more expensive to propagate; larger transactions also take more resources
 	// to validate whether they fit into the pool or not.
-	txMaxSize = 4 * txSlotSize // 128KB
+	// txMaxSize = 4 * txSlotSize // 128KB
+	// Quorum - value above is not used. instead, ChainConfig.TransactionSizeLimit is used
 )
 
 var (
@@ -84,6 +88,14 @@ var (
 	// than some meaningful limit a user might use. This is not a consensus error
 	// making the transaction invalid, rather a DOS protection.
 	ErrOversizedData = errors.New("oversized data")
+
+	// ErrInvalidGasPrice is returned if gas price is disabled, but a gas price
+	// is specified in the transaction
+	ErrInvalidGasPrice = errors.New("Gas price not 0")
+
+	// ErrEtherValueUnsupported is returned if a transaction specifies an Ether Value
+	// for a private Quorum transaction.
+	ErrEtherValueUnsupported = errors.New("ether value is not supported for private transactions")
 )
 
 var (
@@ -135,7 +147,7 @@ const (
 type blockChain interface {
 	CurrentBlock() *types.Block
 	GetBlock(hash common.Hash, number uint64) *types.Block
-	StateAt(root common.Hash) (*state.StateDB, error)
+	StateAt(root common.Hash) (*state.StateDB, mps.PrivateStateRepository, error)
 
 	SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Subscription
 }
@@ -156,6 +168,7 @@ type TxPoolConfig struct {
 	GlobalQueue  uint64 // Maximum number of non-executable transaction slots for all accounts
 
 	Lifetime time.Duration // Maximum amount of time non-executable transaction are queued
+
 }
 
 // DefaultTxPoolConfig contains the default configurations for the transaction
@@ -427,6 +440,13 @@ func (pool *TxPool) GasPrice() *big.Int {
 // SetGasPrice updates the minimum price required by the transaction pool for a
 // new transaction, and drops all transactions below this threshold.
 func (pool *TxPool) SetGasPrice(price *big.Int) {
+	//Quorum
+	if pool.chainconfig.IsQuorum && !pool.chainconfig.IsGasPriceEnabled(pool.chain.CurrentBlock().Header().Number) {
+		log.Info("Transaction pool price threshold not updated as gasPrice is not enabled")
+		return
+	}
+	//End-Quorum
+
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
@@ -560,10 +580,15 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if !pool.eip1559 && tx.Type() == types.DynamicFeeTxType {
 		return ErrTxTypeNotSupported
 	}
+
+	// Quorum
+	sizeLimit := pool.chainconfig.GetTransactionSizeLimit(pool.chain.CurrentBlock().Number())
 	// Reject transactions over defined size to prevent DOS attacks
-	if uint64(tx.Size()) > txMaxSize {
+	if float64(tx.Size()) > float64(sizeLimit*1024) {
 		return ErrOversizedData
 	}
+	// End Quorum
+
 	// Transactions can't be negative. This may never happen using RLP decoded
 	// transactions but may occur if you create a transaction using the RPC.
 	if tx.Value().Sign() < 0 {
@@ -589,9 +614,37 @@ func (pool *TxPool) validateTx(tx *types.Transaction, local bool) error {
 	if err != nil {
 		return ErrInvalidSender
 	}
-	// Drop non-local transactions under our own minimal accepted gas price or tip
-	if !local && tx.GasTipCapIntCmp(pool.gasPrice) < 0 {
-		return ErrUnderpriced
+	if pool.chainconfig.IsQuorum {
+		// Quorum
+		if tx.IsPrivacyMarker() {
+			innerTx, _, _, _ := private.FetchPrivateTransaction(tx.Data())
+			if innerTx != nil {
+				if err := pool.validateTx(innerTx, local); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Quorum
+		// Reject transaction if gas price is disabled, but gas price is specified
+		if (!pool.chainconfig.IsGasPriceEnabled(pool.chain.CurrentBlock().Header().Number)) && tx.GasTipCapIntCmp(common.Big0) != 0 {
+			return ErrInvalidGasPrice
+		}
+		// Ether value is not currently supported on private transactions
+		if tx.IsPrivate() && (len(tx.Data()) == 0 || tx.Value().Sign() != 0) {
+			return ErrEtherValueUnsupported
+		}
+		// Quorum - check if the sender account is authorized to perform the transaction
+		if err := pcore.CheckAccountPermission(tx.From(), tx.To(), tx.Value(), tx.Data(), tx.Gas(), tx.GasPrice()); err != nil {
+			return err
+		}
+	}
+	if !pool.chainconfig.IsQuorum || pool.chainconfig.IsGasPriceEnabled(pool.chain.CurrentBlock().Header().Number) {
+		// Drop non-local transactions under our own minimal accepted gas price or tip
+		local = local || pool.locals.contains(from)
+		if !local && tx.GasTipCapIntCmp(pool.gasPrice) < 0 {
+			return ErrUnderpriced
+		}
 	}
 	// Ensure the transaction adheres to nonce ordering
 	if pool.currentState.GetNonce(from) > tx.Nonce() {
@@ -639,9 +692,9 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 		return false, err
 	}
 	// If the transaction pool is full, discard underpriced transactions
-	if uint64(pool.all.Slots()+numSlots(tx)) > pool.config.GlobalSlots+pool.config.GlobalQueue {
+	if uint64(pool.all.Count()+numSlots(tx)) > pool.config.GlobalSlots+pool.config.GlobalQueue {
 		// If the new transaction is underpriced, don't accept it
-		if !isLocal && pool.priced.Underpriced(tx) {
+		if (!pool.chainconfig.IsQuorum || pool.chainconfig.IsGasPriceEnabled(pool.chain.CurrentBlock().Header().Number)) && !isLocal && pool.priced.Underpriced(tx) {
 			log.Trace("Discarding underpriced transaction", "hash", hash, "gasTipCap", tx.GasTipCap(), "gasFeeCap", tx.GasFeeCap())
 			underpricedTxMeter.Mark(1)
 			return false, ErrUnderpriced
@@ -1235,7 +1288,7 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 	if newHead == nil {
 		newHead = pool.chain.CurrentBlock().Header() // Special case during testing
 	}
-	statedb, err := pool.chain.StateAt(newHead.Root)
+	statedb, _, err := pool.chain.StateAt(newHead.Root)
 	if err != nil {
 		log.Error("Failed to reset txpool state", "err", err)
 		return
@@ -1260,6 +1313,11 @@ func (pool *TxPool) reset(oldHead, newHead *types.Header) {
 // future queue to the set of pending transactions. During this process, all
 // invalidated transactions (low nonce, low balance) are deleted.
 func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Transaction {
+	isQuorum := pool.chainconfig.IsQuorum
+	// Init delayed since tx pool could have been started before any state sync
+	if isQuorum && pool.pendingNonces == nil {
+		pool.reset(nil, nil)
+	}
 	// Track the promoted transactions to broadcast them at once
 	var promoted []*types.Transaction
 
@@ -1276,19 +1334,23 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 			pool.all.Remove(hash)
 		}
 		log.Trace("Removed old queued transactions", "count", len(forwards))
-		// Drop all transactions that are too costly (low balance or out of gas)
-		drops, _ := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
-		for _, tx := range drops {
-			hash := tx.Hash()
-			pool.all.Remove(hash)
+		var drops types.Transactions
+		if !isQuorum || pool.chainconfig.IsGasPriceEnabled(pool.chain.CurrentBlock().Header().Number) {
+			// Drop all transactions that are too costly (low balance or out of gas)
+			drops, _ = list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
+			for _, tx := range drops {
+				hash := tx.Hash()
+				pool.all.Remove(hash)
+			}
+			log.Trace("Removed unpayable queued transactions", "count", len(drops))
+			queuedNofundsMeter.Mark(int64(len(drops)))
 		}
-		log.Trace("Removed unpayable queued transactions", "count", len(drops))
-		queuedNofundsMeter.Mark(int64(len(drops)))
 
 		// Gather all executable transactions and promote them
 		readies := list.Ready(pool.pendingNonces.get(addr))
 		for _, tx := range readies {
 			hash := tx.Hash()
+			log.Trace("Promoting queued transaction", "hash", hash)
 			if pool.promoteTx(addr, hash, tx) {
 				promoted = append(promoted, tx)
 			}
@@ -1776,4 +1838,11 @@ func (t *txLookup) RemotesBelowTip(threshold *big.Int) types.Transactions {
 // numSlots calculates the number of slots needed for a single transaction.
 func numSlots(tx *types.Transaction) int {
 	return int((tx.Size() + txSlotSize - 1) / txSlotSize)
+}
+
+// Quorum
+
+// helper function to return chainHeadChannel size
+func GetChainHeadChannleSize() int {
+	return chainHeadChanSize
 }

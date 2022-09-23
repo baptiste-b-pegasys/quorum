@@ -56,7 +56,14 @@ func TestStateProcessorErrors(t *testing.T) {
 		}
 		signer     = types.LatestSigner(config)
 		testKey, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+		db         = rawdb.NewMemoryDatabase()
+		gspec      = &Genesis{
+			Config: params.TestChainConfig,
+		}
+		genesis       = gspec.MustCommit(db)
+		blockchain, _ = NewBlockChain(db, nil, gspec.Config, ethash.NewFaker(), vm.Config{}, nil, nil, nil)
 	)
+	defer blockchain.Stop()
 	var makeTx = func(nonce uint64, to common.Address, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *types.Transaction {
 		tx, _ := types.SignTx(types.NewTransaction(nonce, to, amount, gasLimit, gasPrice, data), signer, testKey)
 		return tx

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
@@ -465,7 +466,7 @@ func (ps *peerSet) idlePeers(minProtocol, maxProtocol uint, idleCheck func(*peer
 		tps   = make([]int, 0, len(ps.peers))
 	)
 	for _, p := range ps.peers {
-		if p.version >= minProtocol && p.version <= maxProtocol {
+		if p.version >= minProtocol && p.version <= maxProtocol || p.version == consensus.Istanbul99 {
 			if idleCheck(p) {
 				idle = append(idle, p)
 				tps = append(tps, capacity(p))

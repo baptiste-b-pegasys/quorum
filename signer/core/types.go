@@ -87,6 +87,9 @@ type SendTxArgs struct {
 	// For non-legacy transactions
 	AccessList *types.AccessList `json:"accessList,omitempty"`
 	ChainID    *hexutil.Big      `json:"chainId,omitempty"`
+
+	// QUORUM
+	IsPrivate bool `json:"isPrivate,omitempty"`
 }
 
 func (args SendTxArgs) String() string {
@@ -115,5 +118,13 @@ func (args *SendTxArgs) toTransaction() *types.Transaction {
 		to := args.To.Address()
 		txArgs.To = &to
 	}
+	if args.IsPrivate {
+		tx.SetPrivate()
+	}
 	return txArgs.ToTransaction()
+}
+
+// Quorum
+func (args SendTxArgs) isPrivacyMarker() bool {
+	return args.To != nil && args.To.Address() == common.QuorumPrivacyPrecompileContractAddress()
 }

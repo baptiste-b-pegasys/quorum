@@ -141,7 +141,9 @@ func version(ctx *cli.Context) error {
 	if gitDate != "" {
 		fmt.Println("Git Commit Date:", gitDate)
 	}
+	fmt.Println("Quorum Version:", params.QuorumVersion)
 	fmt.Println("Architecture:", runtime.GOARCH)
+	fmt.Println("Network Id:", ethconfig.Defaults.NetworkId)
 	fmt.Println("Go Version:", runtime.Version())
 	fmt.Println("Operating System:", runtime.GOOS)
 	fmt.Printf("GOPATH=%s\n", os.Getenv("GOPATH"))

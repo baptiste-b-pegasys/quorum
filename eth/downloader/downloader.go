@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/permission/core"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -78,6 +79,8 @@ var (
 	errInvalidBody             = errors.New("retrieved block body is invalid")
 	errInvalidReceipt          = errors.New("retrieved receipt is invalid")
 	errCancelStateFetch        = errors.New("state data download canceled (requested)")
+	errCancelHeaderFetch       = errors.New("block header download canceled (requested)")
+	errCancelBlockFetch        = errors.New("block download canceled (requested)")
 	errCancelContentProcessing = errors.New("content processing canceled (requested)")
 	errCanceled                = errors.New("syncing canceled (requested)")
 	errNoSyncActive            = errors.New("no sync active")
@@ -205,6 +208,11 @@ type BlockChain interface {
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
 func New(checkpoint uint64, stateDb ethdb.Database, stateBloom *trie.SyncBloom, mux *event.TypeMux, chain BlockChain, lightchain LightChain, dropPeer peerDropFn) *Downloader {
+	// Quorum
+	// reset the value of maxForkAncenstry for Quorum based
+	fullMaxForkAncestry = uint64(params.GetImmutabilityThreshold())
+	// End Quorum
+
 	if lightchain == nil {
 		lightchain = chain
 	}
@@ -358,6 +366,11 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td *big.Int, mode 
 	if !atomic.CompareAndSwapInt32(&d.synchronising, 0, 1) {
 		return errBusy
 	}
+
+	// Quorum
+	// changes for permissions. added set sync status to indicate permissions that node sync has started
+	core.SetSyncStatus()
+
 	defer atomic.StoreInt32(&d.synchronising, 0)
 
 	// Post a user notification of the sync (only once per session)
@@ -427,6 +440,9 @@ func (d *Downloader) synchronise(id string, hash common.Hash, td *big.Int, mode 
 	p := d.peers.Peer(id)
 	if p == nil {
 		return errUnknownPeer
+	}
+	if mode == BoundedFullSync {
+		return d.syncWithPeerUntil(p, hash, td)
 	}
 	return d.syncWithPeer(p, hash, td)
 }
@@ -1646,7 +1662,7 @@ func (d *Downloader) processHeaders(origin uint64, td *big.Int) error {
 					}
 				}
 				// Unless we're doing light chains, schedule the headers for associated content retrieval
-				if mode == FullSync || mode == FastSync {
+				if mode == FullSync || mode == FastSync || mode == BoundedFullSync {
 					// If we've reached the allowed number of pending headers, stall a bit
 					for d.queue.PendingBlocks() >= maxQueuedHeaders || d.queue.PendingReceipts() >= maxQueuedHeaders {
 						select {
