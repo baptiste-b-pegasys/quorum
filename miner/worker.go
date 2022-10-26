@@ -1015,7 +1015,7 @@ func (w *worker) commitNewWork(interrupt *int32, noempty bool, timestamp int64) 
 			// Bump by 2x
 			parentGasLimit = parent.GasLimit() * params.ElasticityMultiplier
 		}
-		header.GasLimit = core.CalcGasLimit1559(parentGasLimit, w.config.GasCeil)
+		header.GasLimit = core.CalcGasLimit1559(parentGasLimit, minGasLimit, w.config.GasCeil)
 	}
 	// Only set the coinbase if our consensus engine is running (avoid spurious block rewards)
 	if w.isRunning() {

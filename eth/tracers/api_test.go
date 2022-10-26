@@ -84,7 +84,7 @@ func newTestBackend(t *testing.T, n int, gspec *core.Genesis, generator func(i i
 		SnapshotLimit:     0,
 		TrieDirtyDisabled: true, // Archive mode
 	}
-	chain, err := core.NewBlockChain(backend.chaindb, cacheConfig, backend.chainConfig, backend.engine, vm.Config{}, nil, nil)
+	chain, err := core.NewBlockChain(backend.chaindb, cacheConfig, backend.chainConfig, backend.engine, vm.Config{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
@@ -348,7 +348,11 @@ func TestOverridenTraceCall(t *testing.T) {
 
 	var testSuite = []struct {
 		blockNumber rpc.BlockNumber
+		call        ethapi.TransactionArgs
 		config      *TraceCallConfig
+		expectErr   error
+		expect      *callTrace
+	}{
 		// Succcessful call with state overriding
 		{
 			blockNumber: rpc.PendingBlockNumber,

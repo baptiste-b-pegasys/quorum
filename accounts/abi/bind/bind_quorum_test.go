@@ -200,6 +200,8 @@ type mockTransactor struct {
 	capturedInternalPrivateTransactionArgs PrivateTxArgs
 }
 
+var _ ContractTransactor = &mockTransactor{}
+
 func (s *mockTransactor) PreparePrivateTransaction(_ []byte, _ string) (common.EncryptedPayloadHash, error) {
 	return tmPrivatePayloadHash, nil
 }
@@ -227,5 +229,13 @@ func (s *mockTransactor) SuggestGasPrice(_ context.Context) (*big.Int, error) {
 }
 
 func (s *mockTransactor) EstimateGas(_ context.Context, _ ethereum.CallMsg) (gas uint64, err error) {
+	panic("implement me")
+}
+
+func (s *mockTransactor) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
+	panic("implement me")
+}
+
+func (s *mockTransactor) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	panic("implement me")
 }

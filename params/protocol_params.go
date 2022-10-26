@@ -161,6 +161,12 @@ const (
 	// up to half the consumed gas could be refunded. Redefined as 1/5th in EIP-3529
 	RefundQuotient        uint64 = 2
 	RefundQuotientEIP3529 uint64 = 5
+
+	// Quorum
+
+	QuorumMaximumExtraDataSize uint64 = 65 // Maximum size extra data may be after Genesis.
+	// Quorum - payload for a transaction, the size of the buffer to 128kb to match the maximum allowed in chain config
+	QuorumMaxPayloadBufferSize uint64 = 128
 )
 
 // Gas discount table for BLS12-381 G1 and G2 multi exponentiation operations

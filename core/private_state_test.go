@@ -15,11 +15,15 @@ type callmsg struct {
 	addr       common.Address
 	to         *common.Address
 	gas        uint64
+	gasTipCap  *big.Int
+	gasFeeCap  *big.Int
 	gasPrice   *big.Int
 	value      *big.Int
 	data       []byte
 	accessList types.AccessList // EIP-2930 access list.
 }
+
+var _ Message = &callmsg{}
 
 // accessor boilerplate to implement core.Message
 func (m callmsg) From() common.Address         { return m.addr }
@@ -27,6 +31,8 @@ func (m callmsg) FromFrontier() common.Address { return m.addr }
 func (m callmsg) Nonce() uint64                { return 0 }
 func (m callmsg) To() *common.Address          { return m.to }
 func (m callmsg) GasPrice() *big.Int           { return m.gasPrice }
+func (m callmsg) GasTipCap() *big.Int          { return m.gasTipCap }
+func (m callmsg) GasFeeCap() *big.Int          { return m.gasFeeCap }
 func (m callmsg) Gas() uint64                  { return m.gas }
 func (m callmsg) Value() *big.Int              { return m.value }
 func (m callmsg) Data() []byte                 { return m.data }

@@ -209,23 +209,23 @@ func TestCalcGasLimit1559(t *testing.T) {
 		{40000000, 40039061, 39960939},
 	} {
 		// Increase
-		if have, want := CalcGasLimit1559(tc.pGasLimit, 2*tc.pGasLimit), tc.max; have != want {
+		if have, want := CalcGasLimit1559(tc.pGasLimit, params.DefaultMinGasLimit, 2*tc.pGasLimit), tc.max; have != want {
 			t.Errorf("test %d: have %d want <%d", i, have, want)
 		}
 		// Decrease
-		if have, want := CalcGasLimit1559(tc.pGasLimit, 0), tc.min; have != want {
+		if have, want := CalcGasLimit1559(tc.pGasLimit, params.DefaultMinGasLimit, 0), tc.min; have != want {
 			t.Errorf("test %d: have %d want >%d", i, have, want)
 		}
 		// Small decrease
-		if have, want := CalcGasLimit1559(tc.pGasLimit, tc.pGasLimit-1), tc.pGasLimit-1; have != want {
+		if have, want := CalcGasLimit1559(tc.pGasLimit, params.DefaultMinGasLimit, tc.pGasLimit-1), tc.pGasLimit-1; have != want {
 			t.Errorf("test %d: have %d want %d", i, have, want)
 		}
 		// Small increase
-		if have, want := CalcGasLimit1559(tc.pGasLimit, tc.pGasLimit+1), tc.pGasLimit+1; have != want {
+		if have, want := CalcGasLimit1559(tc.pGasLimit, params.DefaultMinGasLimit, tc.pGasLimit+1), tc.pGasLimit+1; have != want {
 			t.Errorf("test %d: have %d want %d", i, have, want)
 		}
 		// No change
-		if have, want := CalcGasLimit1559(tc.pGasLimit, tc.pGasLimit), tc.pGasLimit; have != want {
+		if have, want := CalcGasLimit1559(tc.pGasLimit, params.DefaultMinGasLimit, tc.pGasLimit), tc.pGasLimit; have != want {
 			t.Errorf("test %d: have %d want %d", i, have, want)
 		}
 	}

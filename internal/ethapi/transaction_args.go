@@ -34,6 +34,9 @@ import (
 // TransactionArgs represents the arguments to construct a new transaction
 // or a message call.
 type TransactionArgs struct {
+	// Quorum
+	PrivateTxArgs
+
 	From                 *common.Address `json:"from"`
 	To                   *common.Address `json:"to"`
 	Gas                  *hexutil.Uint64 `json:"gas"`

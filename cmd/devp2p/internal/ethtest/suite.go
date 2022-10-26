@@ -17,31 +17,16 @@
 package ethtest
 
 import (
-	"fmt"
-	"net"
-	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/internal/utesting"
-	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
-var pretty = spew.ConfigState{
-	Indent:                  "  ",
-	DisableCapacities:       true,
-	DisablePointerAddresses: true,
-	SortKeys:                true,
-}
-
-var timeout = 20 * time.Second
-
-// Suite represents a structure used to test the eth
-// protocol of a node(s).
+// Suite represents a structure used to test a node's conformance
+// to the eth protocol.
 type Suite struct {
 	Dest *enode.Node
 
@@ -168,40 +153,6 @@ func (s *Suite) TestStatus66(t *utesting.T) {
 	defer conn.Close()
 	if err := conn.peer(s.chain, nil); err != nil {
 		t.Fatalf("peering failed: %v", err)
-	}
-}
-
-// TestMaliciousStatus sends a status package with a large total difficulty.
-func (s *Suite) TestMaliciousStatus(t *utesting.T) {
-	conn, err := s.dial()
-	if err != nil {
-		t.Fatalf("could not dial: %v", err)
-	}
-	defer conn.Close()
-	// get protoHandshake
-	conn.handshake(t)
-	status := &Status{
-		ProtocolVersion: uint32(conn.negotiatedProtoVersion),
-		NetworkID:       s.chain.chainConfig.ChainID.Uint64(),
-		TD:              largeNumber(2),
-		Head:            s.chain.blocks[s.chain.Len()-1].Hash(),
-		Genesis:         s.chain.blocks[0].Hash(),
-		ForkID:          s.chain.ForkID(),
-	}
-	// get status
-	switch msg := conn.statusExchange(t, s.chain, status).(type) {
-	case *Status:
-		t.Logf("%+v\n", msg)
-	default:
-		t.Fatalf("expected status, got: %#v ", msg)
-	}
-	// wait for disconnect
-	switch msg := conn.ReadAndServe(s.chain, timeout).(type) {
-	case *Disconnect:
-	case *Error:
-		return
-	default:
-		t.Fatalf("expected disconnect, got: %s", pretty.Sdump(msg))
 	}
 }
 
@@ -720,9 +671,6 @@ func (s *Suite) TestMaliciousTx66(t *utesting.T) {
 	if err := s.sendMaliciousTxs(t, eth66); err != nil {
 		t.Fatal(err)
 	}
-	sendConn.handshake(t)
-	sendConn.statusExchange(t, s.chain, nil)
-	return sendConn
 }
 
 // TestLargeTxRequest66 tests whether a node can fulfill a large GetPooledTransactions
@@ -832,41 +780,4 @@ func (s *Suite) TestNewPooledTxs66(t *utesting.T) {
 			t.Fatalf("unexpected %s", pretty.Sdump(msg))
 		}
 	}
-}
-
-func (s *Suite) TestTransaction(t *utesting.T) {
-	tests := []*types.Transaction{
-		getNextTxFromChain(t, s),
-		unknownTx(t, s),
-	}
-	for i, tx := range tests {
-		t.Logf("Testing tx propagation: %v\n", i)
-		sendSuccessfulTx(t, s, tx)
-	}
-}
-
-func (s *Suite) TestMaliciousTx(t *utesting.T) {
-	badTxs := []*types.Transaction{
-		getOldTxFromChain(t, s),
-		invalidNonceTx(t, s),
-		hugeAmount(t, s),
-		hugeGasPrice(t, s),
-		hugeData(t, s),
-	}
-	sendConn := s.setupConnection(t)
-	defer sendConn.Close()
-	// set up receiving connection before sending txs to make sure
-	// no announcements are missed
-	recvConn := s.setupConnection(t)
-	defer recvConn.Close()
-
-	for i, tx := range badTxs {
-		t.Logf("Testing malicious tx propagation: %v\n", i)
-		if err := sendConn.Write(&Transactions{tx}); err != nil {
-			t.Fatalf("could not write to connection: %v", err)
-		}
-
-	}
-	// check to make sure bad txs aren't propagated
-	waitForTxPropagation(t, s, badTxs, recvConn)
 }

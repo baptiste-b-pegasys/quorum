@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/private/engine"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -61,13 +60,6 @@ type Transaction struct {
 	from atomic.Value
 
 	privacyMetadata *PrivacyMetadata
-}
-
-// NewTx creates a new transaction.
-func NewTx(inner TxData) *Transaction {
-	tx := new(Transaction)
-	tx.setDecoded(inner.copy(), 0)
-	return tx
 }
 
 // NewTx creates a new transaction.

@@ -119,7 +119,6 @@ type Peer struct {
 	testPipe *MsgPipeRW // for testing
 
 	// Quorum
-	testPipe            *MsgPipeRW // for testing
 	EthPeerRegistered   chan struct{}
 	EthPeerDisconnected chan struct{}
 }
@@ -542,15 +541,4 @@ func (p *Peer) Info() *PeerInfo {
 		info.Protocols[proto.Name] = protoInfo
 	}
 	return info
-}
-
-// Quorum
-
-// NewPeerPipe creates a peer for testing purposes.
-// The message pipe given as the last parameter is closed when
-// Disconnect is called on the peer.
-func NewPeerPipe(id enode.ID, name string, caps []Cap, pipe *MsgPipeRW) *Peer {
-	p := NewPeer(id, name, caps)
-	p.testPipe = pipe
-	return p
 }

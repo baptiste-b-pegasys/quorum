@@ -130,10 +130,6 @@ func setupTxPoolWithConfig(config *params.ChainConfig) (*TxPool, *ecdsa.PrivateK
 	return pool, key
 }
 
-func setupTxPool() (*TxPool, *ecdsa.PrivateKey) {
-	return setupTxPoolWithConfig(params.TestChainConfig)
-}
-
 func setupQuorumTxPool() (*TxPool, *ecdsa.PrivateKey) {
 	return setupTxPoolWithConfig(params.QuorumTestChainConfig)
 }
@@ -1364,7 +1360,7 @@ func TestTransactionAllowedTxSize(t *testing.T) {
 		t.Fatalf("expected rejection on slightly oversize transaction")
 	}
 	// Try adding a transaction of random not allowed size
-	if err := pool.addRemoteSync(pricedDataTransaction(2, pool.currentMaxGas, big.NewInt(1), key, dataSize+1+uint64(rand.Intn(10*txMaxSize)))); err == nil {
+	if err := pool.addRemoteSync(pricedDataTransaction(2, pool.currentMaxGas, big.NewInt(1), key, dataSize+1+uint64(rand.Intn(10*int(txMaxSize))))); err == nil {
 		t.Fatalf("expected rejection on oversize transaction")
 	}
 	// Run some sanity checks on the pool internals

@@ -58,7 +58,7 @@ func (cg *callHelper) MakeCall(private bool, key *ecdsa.PrivateKey, to common.Ad
 		return err
 	}
 	defer func() { cg.nonces[from]++ }()
-	msg, err := tx.AsMessage(signer)
+	msg, err := tx.AsMessage(signer, cg.header.BaseFee)
 	if err != nil {
 		return err
 	}

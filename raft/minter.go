@@ -297,13 +297,13 @@ func (minter *minter) createWork() *work {
 }
 
 func (minter *minter) getTransactions() *types.TransactionsByPriceAndNonce {
-	allAddrTxes, err := minter.eth.TxPool().Pending()
+	allAddrTxes, err := minter.eth.TxPool().Pending(false)
 	if err != nil { // TODO: handle
 		panic(err)
 	}
 	addrTxes := minter.speculativeChain.withoutProposedTxes(allAddrTxes)
 	signer := types.MakeSigner(minter.chain.Config(), minter.chain.CurrentBlock().Number())
-	return types.NewTransactionsByPriceAndNonce(signer, addrTxes)
+	return types.NewTransactionsByPriceAndNonce(signer, addrTxes, minter.chain.CurrentHeader().BaseFee)
 }
 
 // Sends-off events asynchronously.

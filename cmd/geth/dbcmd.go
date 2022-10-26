@@ -160,7 +160,7 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 			utils.GoerliFlag,
 			utils.CalaverasFlag,
 		},
-		Description: `This command sets a given database key to the given value. 
+		Description: `This command sets a given database key to the given value.
 WARNING: This is a low-level operation which may cause database corruption!`,
 	}
 	dbGetSlotsCmd = cli.Command{

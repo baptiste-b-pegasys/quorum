@@ -102,7 +102,7 @@ func NewSimulatedBackendFrom(ethereum *eth.Ethereum) *SimulatedBackend {
 		config:     ethereum.BlockChain().Config(),
 		events:     filters.NewEventSystem(&filterBackend{ethereum.ChainDb(), ethereum.BlockChain()}, false),
 	}
-	backend.rollback()
+	backend.rollback(ethereum.BlockChain().CurrentBlock())
 	return backend
 }
 
@@ -142,7 +142,7 @@ func (b *SimulatedBackend) Rollback() {
 }
 
 func (b *SimulatedBackend) rollback(parent *types.Block) {
-	blocks, _ := core.GenerateChain(b.config, b.blockchain.CurrentBlock(), ethash.NewFaker(), b.database, 1, func(int, *core.BlockGen) {}) // Quorum
+	blocks, _ := core.GenerateChain(b.config, parent, ethash.NewFaker(), b.database, 1, func(int, *core.BlockGen) {})
 
 	b.pendingBlock = blocks[0]
 	b.pendingState, _ = state.New(b.pendingBlock.Root(), b.blockchain.StateCache(), nil)

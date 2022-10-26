@@ -250,7 +250,12 @@ func remoteConsole(ctx *cli.Context) error {
 // dialRPC returns a RPC client which connects to the given endpoint.
 // The check for empty endpoint implements the defaulting logic
 // for "geth attach" with no argument.
-func dialRPC(endpoint string) (*rpc.Client, error) {
+//
+// Quorum: passing the cli context to build security-aware client:
+// 1. Custom TLS configuration
+// 2. Access Token awareness via rpc.HttpCredentialsProviderFunc
+// 3. PSI awareness from environment variable and endpoint query param
+func dialRPC(endpoint string, ctx *cli.Context) (*rpc.Client, error) {
 	if endpoint == "" {
 		endpoint = node.DefaultIPCEndpoint(clientIdentifier)
 	} else if strings.HasPrefix(endpoint, "rpc:") || strings.HasPrefix(endpoint, "ipc:") {

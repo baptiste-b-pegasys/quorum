@@ -718,9 +718,11 @@ func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *ty
 // calculateRequestSpan calculates what headers to request from a peer when trying to determine the
 // common ancestor.
 // It returns parameters to be used for peer.RequestHeadersByNumber:
-//  from - starting block number
-//  count - number of headers to request
-//  skip - number of headers to skip
+//
+//	from - starting block number
+//	count - number of headers to request
+//	skip - number of headers to skip
+//
 // and also returns 'max', the last block which is expected to be returned by the remote peers,
 // given the (from,count,skip)
 func calculateRequestSpan(remoteHeight, localHeight uint64) (int64, int, int, uint64) {
@@ -1335,22 +1337,22 @@ func (d *Downloader) fetchReceipts(from uint64) error {
 // various callbacks to handle the slight differences between processing them.
 //
 // The instrumentation parameters:
-//  - errCancel:   error type to return if the fetch operation is cancelled (mostly makes logging nicer)
-//  - deliveryCh:  channel from which to retrieve downloaded data packets (merged from all concurrent peers)
-//  - deliver:     processing callback to deliver data packets into type specific download queues (usually within `queue`)
-//  - wakeCh:      notification channel for waking the fetcher when new tasks are available (or sync completed)
-//  - expire:      task callback method to abort requests that took too long and return the faulty peers (traffic shaping)
-//  - pending:     task callback for the number of requests still needing download (detect completion/non-completability)
-//  - inFlight:    task callback for the number of in-progress requests (wait for all active downloads to finish)
-//  - throttle:    task callback to check if the processing queue is full and activate throttling (bound memory use)
-//  - reserve:     task callback to reserve new download tasks to a particular peer (also signals partial completions)
-//  - fetchHook:   tester callback to notify of new tasks being initiated (allows testing the scheduling logic)
-//  - fetch:       network callback to actually send a particular download request to a physical remote peer
-//  - cancel:      task callback to abort an in-flight download request and allow rescheduling it (in case of lost peer)
-//  - capacity:    network callback to retrieve the estimated type-specific bandwidth capacity of a peer (traffic shaping)
-//  - idle:        network callback to retrieve the currently (type specific) idle peers that can be assigned tasks
-//  - setIdle:     network callback to set a peer back to idle and update its estimated capacity (traffic shaping)
-//  - kind:        textual label of the type being downloaded to display in log messages
+//   - errCancel:   error type to return if the fetch operation is cancelled (mostly makes logging nicer)
+//   - deliveryCh:  channel from which to retrieve downloaded data packets (merged from all concurrent peers)
+//   - deliver:     processing callback to deliver data packets into type specific download queues (usually within `queue`)
+//   - wakeCh:      notification channel for waking the fetcher when new tasks are available (or sync completed)
+//   - expire:      task callback method to abort requests that took too long and return the faulty peers (traffic shaping)
+//   - pending:     task callback for the number of requests still needing download (detect completion/non-completability)
+//   - inFlight:    task callback for the number of in-progress requests (wait for all active downloads to finish)
+//   - throttle:    task callback to check if the processing queue is full and activate throttling (bound memory use)
+//   - reserve:     task callback to reserve new download tasks to a particular peer (also signals partial completions)
+//   - fetchHook:   tester callback to notify of new tasks being initiated (allows testing the scheduling logic)
+//   - fetch:       network callback to actually send a particular download request to a physical remote peer
+//   - cancel:      task callback to abort an in-flight download request and allow rescheduling it (in case of lost peer)
+//   - capacity:    network callback to retrieve the estimated type-specific bandwidth capacity of a peer (traffic shaping)
+//   - idle:        network callback to retrieve the currently (type specific) idle peers that can be assigned tasks
+//   - setIdle:     network callback to set a peer back to idle and update its estimated capacity (traffic shaping)
+//   - kind:        textual label of the type being downloaded to display in log messages
 func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack) (int, error), wakeCh chan bool,
 	expire func() map[string]int, pending func() int, inFlight func() bool, reserve func(*peerConnection, int) (*fetchRequest, bool, bool),
 	fetchHook func([]*types.Header), fetch func(*peerConnection, *fetchRequest) error, cancel func(*fetchRequest), capacity func(*peerConnection) int,
@@ -2023,5 +2025,245 @@ func (d *Downloader) deliver(destCh chan dataPack, packet dataPack, inMeter, dro
 		return nil
 	case <-cancel:
 		return errNoSyncActive
+	}
+}
+
+// Extra downloader functionality for non-proof-of-work consensus
+
+// Synchronizes with a peer, but only up to the provided Hash
+func (d *Downloader) syncWithPeerUntil(p *peerConnection, hash common.Hash, td *big.Int) (err error) {
+	d.mux.Post(StartEvent{})
+	defer func() {
+		// reset on error
+		if err != nil {
+			d.mux.Post(FailedEvent{err})
+		} else {
+			// Raft syncWithPeerUntil never use the latest field in DoneEvent
+			// therefore post empty DoneEvent only
+			d.mux.Post(DoneEvent{})
+		}
+	}()
+	if p.version < 62 {
+		return errTooOld
+	}
+
+	log.Info("Synchronising with the network", "id", p.id, "version", p.version)
+	defer func(start time.Time) {
+		log.Info("Synchronisation terminated", "duration", time.Since(start))
+	}(time.Now())
+
+	frozen, _ := d.stateDB.Ancients()
+	localHeight := d.blockchain.CurrentBlock().NumberU64()
+
+	// check if recovering state db and only ancient db is present
+	// in this case its possible that local hash is not the latest
+	// as per raft wal. change header to remote header
+	var remoteHeader *types.Header
+	if localHeight == 0 && frozen > 0 {
+		// statedb was removed and is being recovered now
+		// we trust the peer height and sync upto that
+		remoteHeader, _, err = d.fetchHead(p) // #21529
+	} else {
+		remoteHeader, err = d.fetchHeader(p, hash)
+	}
+	if err != nil {
+		return err
+	}
+
+	remoteHeight := remoteHeader.Number.Uint64()
+
+	d.syncStatsLock.Lock()
+	if d.syncStatsChainHeight <= localHeight || d.syncStatsChainOrigin > localHeight {
+		d.syncStatsChainOrigin = localHeight
+	}
+	d.syncStatsChainHeight = remoteHeight
+	d.syncStatsLock.Unlock()
+
+	d.queue.Prepare(localHeight+1, d.getMode())
+	if d.syncInitHook != nil {
+		d.syncInitHook(localHeight, remoteHeight)
+	}
+
+	fetchers := []func() error{
+		func() error { return d.fetchBoundedHeaders(p, localHeight+1, remoteHeight) },
+		func() error { return d.fetchBodies(localHeight + 1) },
+		func() error { return d.fetchReceipts(localHeight + 1) },    // Receipts are only retrieved during fast sync
+		func() error { return d.processHeaders(localHeight+1, td) }, // #21529
+		d.processFullSyncContent, //This must be added to clear the buffer of downloaded content as it's being filled
+	}
+	return d.spawnSync(fetchers)
+}
+
+// Fetches headers between `from` and `to`, inclusive.
+// Assumes invariant: from <= to.
+func (d *Downloader) fetchBoundedHeaders(p *peerConnection, from uint64, to uint64) error {
+	log.Info("directing header downloads", "peer", p, "from", from, "to", to)
+	defer log.Info("header download terminated", "peer", p)
+
+	// Create a timeout timer, and the associated header fetcher
+	skeleton := true            // Skeleton assembly phase or finishing up
+	request := time.Now()       // time of the last skeleton fetch request
+	timeout := time.NewTimer(0) // timer to dump a non-responsive active peer
+	<-timeout.C                 // timeout channel should be initially empty
+	defer timeout.Stop()
+
+	getHeaders := func(from uint64) {
+		request = time.Now()
+		ttl := d.peers.rates.TargetTimeout()
+		timeout.Reset(ttl)
+
+		skeletonStart := from + uint64(MaxHeaderFetch) - 1
+
+		if skeleton {
+			if skeletonStart > to {
+				skeleton = false
+			}
+		}
+
+		if skeleton {
+			numSkeletonHeaders := minInt(MaxSkeletonSize, (int(to-from)+1)/MaxHeaderFetch)
+			log.Trace("fetching skeleton headers", "peer", p, "num skeleton headers", numSkeletonHeaders, "from", from)
+			go p.peer.RequestHeadersByNumber(skeletonStart, numSkeletonHeaders, MaxHeaderFetch-1, false)
+		} else {
+			// There are not enough headers remaining to warrant a skeleton fetch.
+			// Grab all of the remaining headers.
+
+			numHeaders := int(to-from) + 1
+			log.Trace("fetching full headers", "peer", p, "num headers", numHeaders, "from", from)
+			go p.peer.RequestHeadersByNumber(from, numHeaders, 0, false)
+		}
+	}
+	// Start pulling the header chain skeleton until all is done
+	getHeaders(from)
+
+	for {
+		select {
+		case <-d.cancelCh:
+			return errCancelHeaderFetch
+
+		case packet := <-d.headerCh:
+			// Make sure the active peer is giving us the skeleton headers
+			if packet.PeerId() != p.id {
+				log.Info("Received headers from incorrect peer", "peer id", packet.PeerId())
+				break
+			}
+			headerReqTimer.UpdateSince(request)
+			timeout.Stop()
+
+			headers := packet.(*headerPack).headers
+
+			// If we received a skeleton batch, resolve internals concurrently
+			if skeleton {
+				filled, proced, err := d.fillHeaderSkeleton(from, headers)
+				if err != nil {
+					log.Debug("skeleton chain invalid", "peer", p, "err", err)
+					return errInvalidChain
+				}
+				headers = filled[proced:]
+				from += uint64(proced)
+			}
+			// Insert all the new headers and fetch the next batch
+			if len(headers) > 0 {
+				log.Trace("schedule headers", "peer", p, "num headers", len(headers), "from", from)
+				select {
+				case d.headerProcCh <- headers:
+				case <-d.cancelCh:
+					return errCancelHeaderFetch
+				}
+				from += uint64(len(headers))
+			}
+
+			if from <= to {
+				getHeaders(from)
+			} else {
+				// Notify the content fetchers that no more headers are inbound and return.
+				select {
+				case d.headerProcCh <- nil:
+					return nil
+				case <-d.cancelCh:
+					return errCancelHeaderFetch
+				}
+			}
+
+		case <-timeout.C:
+			// Header retrieval timed out, consider the peer bad and drop
+			log.Info("header request timed out", "peer", p)
+			headerTimeoutMeter.Mark(1)
+			d.dropPeer(p.id)
+
+			// Finish the sync gracefully instead of dumping the gathered data though
+			for _, ch := range []chan bool{d.bodyWakeCh, d.receiptWakeCh} {
+				select {
+				case ch <- false:
+				case <-d.cancelCh:
+				}
+			}
+			select {
+			case d.headerProcCh <- nil:
+			case <-d.cancelCh:
+			}
+			return errBadPeer
+		}
+	}
+}
+
+// Not defined in go's stdlib:
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// requestTTL returns the current timeout allowance for a single download request
+// to finish under.
+/*func (d *Downloader) requestTTL() time.Duration {
+	var (
+		rtt  = time.Duration(atomic.LoadUint64(&d.rttEstimate))
+		conf = float64(atomic.LoadUint64(&d.rttConfidence)) / 1000000.0
+	)
+	ttl := time.Duration(ttlScaling) * time.Duration(float64(rtt)/conf)
+	if ttl > ttlLimit {
+		ttl = ttlLimit
+	}
+	return ttl
+}*/
+
+// Fetches a single header from a peer
+func (d *Downloader) fetchHeader(p *peerConnection, hash common.Hash) (*types.Header, error) {
+	log.Info("retrieving remote chain height", "peer", p)
+
+	go p.peer.RequestHeadersByHash(hash, 1, 0, false)
+
+	ttl := d.peers.rates.TargetTimeout()
+	timeout := time.After(ttl)
+	for {
+		select {
+		case <-d.cancelCh:
+			return nil, errCancelBlockFetch
+
+		case packet := <-d.headerCh:
+			// Discard anything not from the origin peer
+			if packet.PeerId() != p.id {
+				log.Info("Received headers from incorrect peer", "peer id", packet.PeerId())
+				break
+			}
+			// Make sure the peer actually gave something valid
+			headers := packet.(*headerPack).headers
+			if len(headers) != 1 {
+				log.Info("invalid number of head headers (!= 1)", "peer", p, "len(headers)", len(headers))
+				return nil, errBadPeer
+			}
+			return headers[0], nil
+
+		case <-timeout:
+			log.Info("head header timeout", "peer", p)
+			return nil, errTimeout
+
+		case <-d.bodyCh:
+		case <-d.stateCh:
+		case <-d.receiptCh:
+			// Out of bounds delivery, ignore
+		}
 	}
 }

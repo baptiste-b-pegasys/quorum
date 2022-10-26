@@ -2058,27 +2058,24 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 		if !bc.cacheConfig.TrieCleanNoPrefetch {
 			if followup, err := it.peek(); followup != nil && err == nil {
 				throwaway, _ := state.New(parent.Root, bc.stateCache, bc.snaps)
+				// Quorum
+				privateStateRepo, stateRepoErr := bc.privateStateManager.StateRepository(parent.Root)
+				if stateRepoErr == nil && privateStateRepo != nil {
+					throwawayPrivateStateRepo := privateStateRepo.Copy()
 
-				go func(start time.Time, followup *types.Block, throwaway *state.StateDB, interrupt *uint32) {
-					// Quorum
-					privateStateRepo, stateRepoErr := bc.privateStateManager.StateRepository(parent.Root)
-					if stateRepoErr == nil && privateStateRepo != nil {
-						throwawayPrivateStateRepo := privateStateRepo.Copy()
+					// Quorum: add privateStateThrowaway argument
+					go func(start time.Time, followup *types.Block, throwaway *state.StateDB, privateStateThrowaway mps.PrivateStateRepository, interrupt *uint32) {
+						bc.prefetcher.Prefetch(followup, throwaway, throwawayPrivateStateRepo, bc.vmConfig, &followupInterrupt)
 
-						// Quorum: add privateStateThrowaway argument
-						go func(start time.Time, followup *types.Block, throwaway *state.StateDB, privateStateThrowaway mps.PrivateStateRepository, interrupt *uint32) {
-							bc.prefetcher.Prefetch(followup, throwaway, throwawayPrivateStateRepo, bc.vmConfig, &followupInterrupt)
-
-							blockPrefetchExecuteTimer.Update(time.Since(start))
-							if atomic.LoadUint32(interrupt) == 1 {
-								blockPrefetchInterruptMeter.Mark(1)
-							}
-						}(time.Now(), followup, throwaway, throwawayPrivateStateRepo, &followupInterrupt)
-					} else {
-						log.Warn("Unable to load the private state repository for pre-fetching", "stateRepoErr", stateRepoErr)
-					}
-					// End Quorum
-				}()
+						blockPrefetchExecuteTimer.Update(time.Since(start))
+						if atomic.LoadUint32(interrupt) == 1 {
+							blockPrefetchInterruptMeter.Mark(1)
+						}
+					}(time.Now(), followup, throwaway, throwawayPrivateStateRepo, &followupInterrupt)
+				} else {
+					log.Warn("Unable to load the private state repository for pre-fetching", "stateRepoErr", stateRepoErr)
+				}
+				// End Quorum
 			}
 		}
 		// Process block using the parent state as reference point

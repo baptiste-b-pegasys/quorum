@@ -300,7 +300,7 @@ type FilterCriteria ethereum.FilterQuery
 // In case "fromBlock" > "toBlock" an error is returned.
 //
 // https://eth.wiki/json-rpc/API#eth_newfilter
-func (api *PublicFilterAPI) NewFilter(crit FilterCriteria) (rpc.ID, error) {
+func (api *PublicFilterAPI) NewFilter(ctx context.Context, crit FilterCriteria) (rpc.ID, error) {
 	logs := make(chan []*types.Log)
 	psm, err := api.backend.PSMR().ResolveForUserContext(ctx)
 	if err != nil {

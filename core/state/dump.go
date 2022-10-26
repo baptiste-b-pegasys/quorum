@@ -228,9 +228,9 @@ func (self *StateDB) DumpAddress(address common.Address) (DumpAccount, bool) {
 	account := DumpAccount{
 		Balance:  obj.data.Balance.String(),
 		Nonce:    obj.data.Nonce,
-		Root:     common.Bytes2Hex(obj.data.Root[:]),
-		CodeHash: common.Bytes2Hex(obj.data.CodeHash),
-		Code:     common.Bytes2Hex(obj.Code(self.db)),
+		Root:     obj.data.Root[:],
+		CodeHash: obj.data.CodeHash,
+		Code:     obj.Code(self.db),
 		Storage:  make(map[common.Hash]string),
 	}
 

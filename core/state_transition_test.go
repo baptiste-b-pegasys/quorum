@@ -932,7 +932,7 @@ func newTypicalPrivateMessage(cfg *config) PrivateMessage {
 	} else {
 		tx.SetTxPrivacyMetadata(nil) // simulate standard private transaction
 	}
-	msg, err := tx.AsMessage(&stubSigner{})
+	msg, err := tx.AsMessage(&stubSigner{}, nil)
 	if err != nil {
 		panic(fmt.Sprintf("can't create a new private message: %s", err))
 	}
@@ -948,7 +948,7 @@ func newTypicalPublicMessage(cfg *config) Message {
 		tx = types.NewTransaction(cfg.nonce, *cfg.to, big.NewInt(0), math.MaxUint64, big.NewInt(0), cfg.data)
 	}
 	tx.SetTxPrivacyMetadata(nil)
-	msg, err := tx.AsMessage(&stubSigner{})
+	msg, err := tx.AsMessage(&stubSigner{}, nil)
 	if err != nil {
 		panic(fmt.Sprintf("can't create a new private message: %s", err))
 	}

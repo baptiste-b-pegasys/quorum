@@ -294,7 +294,8 @@ func makeHeader(chain consensus.ChainReader, parent *types.Block, state *state.S
 		if !chain.Config().IsLondon(parent.Number()) {
 			parentGasLimit = parent.GasLimit() * params.ElasticityMultiplier
 		}
-		header.GasLimit = CalcGasLimit1559(parentGasLimit, parentGasLimit)
+		minGasLimit := chain.Config().GetMinerMinGasLimit(parent.Number(), params.DefaultMinGasLimit)
+		header.GasLimit = CalcGasLimit1559(parentGasLimit, minGasLimit, parentGasLimit)
 	}
 	return header
 }

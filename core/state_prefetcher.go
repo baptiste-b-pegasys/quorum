@@ -59,11 +59,11 @@ func newStatePrefetcher(config *params.ChainConfig, bc *BlockChain, engine conse
 // Quorum: Add privateStateDb argument
 func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, privateStateRepo mps.PrivateStateRepository, cfg vm.Config, interrupt *uint32) {
 	var (
-		header       = block.Header()
-		gaspool      = new(GasPool).AddGas(block.GasLimit())
-		blockContext = NewEVMBlockContext(header, p.bc, nil)
-		evm          = vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
-		signer       = types.MakeSigner(p.config, header.Number)
+		header  = block.Header()
+		gaspool = new(GasPool).AddGas(block.GasLimit())
+		//blockContext = NewEVMBlockContext(header, p.bc, nil)
+		//evm          = vm.NewEVM(blockContext, vm.TxContext{}, statedb, privateStateRepo, p.config, cfg)
+		//signer = types.MakeSigner(p.config, header.Number)
 	)
 	// Iterate over and process the individual transactions
 	byzantium := p.config.IsByzantium(block.Number())
@@ -73,10 +73,10 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, p
 			return
 		}
 		// Convert the transaction into an executable message and pre-cache its sender
-		msg, err := tx.AsMessage(signer, header.BaseFee)
+		/*msg, err := tx.AsMessage(signer, header.BaseFee)
 		if err != nil {
 			return // Also invalid block, bail out
-		}
+		}*/
 
 		// Quorum
 		if tx.IsPrivate() && privateStateRepo.IsMPS() {
@@ -110,7 +110,7 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, p
 // Quorum: Add privateStateDb and isMPS arguments
 func precacheTransaction(config *params.ChainConfig, bc ChainContext, author *common.Address, gaspool *GasPool, statedb *state.StateDB, privateStateDb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, innerApply func(*types.Transaction) error) error {
 	// Convert the transaction into an executable message and pre-cache its sender
-	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number))
+	msg, err := tx.AsMessage(types.MakeSigner(config, header.Number), header.BaseFee)
 	if err != nil {
 		return err
 	}

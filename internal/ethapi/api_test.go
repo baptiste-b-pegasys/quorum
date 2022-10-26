@@ -56,7 +56,7 @@ var (
 	arbitraryZeroValue    = big.NewInt(0)
 	arbitraryEmptyData    = new([]byte)
 	arbitraryAccessList   = types.AccessList{}
-	callTxArgs            = CallArgs{
+	txArgs                = TransactionArgs{
 		From:       &arbitraryFrom,
 		To:         &arbitraryTo,
 		Gas:        (*hexutil.Uint64)(&arbitraryGas),
@@ -169,7 +169,7 @@ func teardown() {
 func TestDoEstimateGas_whenNoValueTx_Pre_Istanbul(t *testing.T) {
 	assert := assert.New(t)
 
-	estimation, err := DoEstimateGas(arbitraryCtx, &StubBackend{CurrentHeadNumber: big.NewInt(10)}, callTxArgs, rpc.BlockNumberOrHashWithNumber(10), math.MaxInt64)
+	estimation, err := DoEstimateGas(arbitraryCtx, &StubBackend{CurrentHeadNumber: big.NewInt(10)}, txArgs, rpc.BlockNumberOrHashWithNumber(10), math.MaxInt64)
 
 	assert.NoError(err, "gas estimation")
 	assert.Equal(hexutil.Uint64(25352), estimation, "estimation for a public or private tx")
@@ -178,7 +178,7 @@ func TestDoEstimateGas_whenNoValueTx_Pre_Istanbul(t *testing.T) {
 func TestDoEstimateGas_whenNoValueTx_Istanbul(t *testing.T) {
 	assert := assert.New(t)
 
-	estimation, err := DoEstimateGas(arbitraryCtx, &StubBackend{IstanbulBlock: big.NewInt(0), CurrentHeadNumber: big.NewInt(10)}, callTxArgs, rpc.BlockNumberOrHashWithNumber(10), math.MaxInt64)
+	estimation, err := DoEstimateGas(arbitraryCtx, &StubBackend{IstanbulBlock: big.NewInt(0), CurrentHeadNumber: big.NewInt(10)}, txArgs, rpc.BlockNumberOrHashWithNumber(10), math.MaxInt64)
 
 	assert.NoError(err, "gas estimation")
 	assert.Equal(hexutil.Uint64(22024), estimation, "estimation for a public or private tx")
@@ -314,7 +314,7 @@ func TestSimulateExecution_whenStateValidationMessageCall(t *testing.T) {
 	assert.True(len(affectedCACreationTxHashes) == len(expectedCACreationTxHashes))
 }
 
-//mix and match flags
+// mix and match flags
 func TestSimulateExecution_PrivacyFlagPartyProtectionCallingStandardPrivateContract_Error(t *testing.T) {
 	assert := assert.New(t)
 	privateTxArgs.PrivacyFlag = engine.PrivacyFlagPartyProtection
@@ -708,7 +708,7 @@ func TestSubmitPrivateTransaction(t *testing.T) {
 	nonce := hexutil.Uint64(123)
 	payload := hexutil.Bytes(([]byte("0x43d3e767000000000000000000000000000000000000000000000000000000000000000a"))[:])
 	privateTxArgs.PrivacyFlag = engine.PrivacyFlagStandardPrivate
-	txArgs := SendTxArgs{PrivateTxArgs: *privateTxArgs, From: fromAcct.Address, To: &toAcct.Address, Gas: &gas, Nonce: &nonce, Data: &payload}
+	txArgs := TransactionArgs{PrivateTxArgs: *privateTxArgs, From: &fromAcct.Address, To: &toAcct.Address, Gas: &gas, Nonce: &nonce, Data: &payload}
 
 	_, err := privateAccountAPI.SendTransaction(arbitraryCtx, txArgs, "")
 
@@ -740,7 +740,7 @@ func TestSubmitPrivateTransactionWithPrivacyMarkerEnabled(t *testing.T) {
 	nonce := hexutil.Uint64(123)
 	payload := hexutil.Bytes(([]byte("0x43d3e767000000000000000000000000000000000000000000000000000000000000000a"))[:])
 	privateTxArgs.PrivacyFlag = engine.PrivacyFlagStandardPrivate
-	txArgs := SendTxArgs{PrivateTxArgs: *privateTxArgs, From: fromAcct.Address, To: &toAcct.Address, Gas: &gas, Nonce: &nonce, Data: &payload}
+	txArgs := TransactionArgs{PrivateTxArgs: *privateTxArgs, From: &fromAcct.Address, To: &toAcct.Address, Gas: &gas, Nonce: &nonce, Data: &payload}
 
 	_, err := privateAccountAPI.SendTransaction(arbitraryCtx, txArgs, "")
 
@@ -970,7 +970,7 @@ func (sb *StubBackend) ProtocolVersion() int {
 	panic("implement me")
 }
 
-func (sb *StubBackend) SuggestPrice(ctx context.Context) (*big.Int, error) {
+func (sb *StubBackend) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	return big.NewInt(0), nil
 }
 

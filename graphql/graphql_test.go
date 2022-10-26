@@ -27,9 +27,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/bloombits"
+	"github.com/ethereum/go-ethereum/core/mps"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -367,7 +371,7 @@ func createGQLServiceWithTransactions(t *testing.T, stack *node.Node) {
 	}
 }
 
-func createGQLServiceWithTransactions(t *testing.T, stack *node.Node) {
+/*func createGQLServiceWithTransactions(t *testing.T, stack *node.Node) {
 	// create backend
 	key, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 	address := crypto.PubkeyToAddress(key.PublicKey)
@@ -450,7 +454,7 @@ func createGQLServiceWithTransactions(t *testing.T, stack *node.Node) {
 	if err != nil {
 		t.Fatalf("could not create graphql service: %v", err)
 	}
-}
+}*/
 
 // Quorum
 
@@ -484,6 +488,7 @@ func doHTTPRequest(t *testing.T, req *http.Request) *http.Response {
 	if err != nil {
 		t.Fatal("could not issue a GET request to the given endpoint", err)
 	}
+	return resp
 }
 
 func TestQuorumSchema_PublicTransaction(t *testing.T) {
@@ -735,7 +740,7 @@ func (sb *StubBackend) ProtocolVersion() int {
 	panic("implement me")
 }
 
-func (sb *StubBackend) SuggestPrice(ctx context.Context) (*big.Int, error) {
+func (sb *StubBackend) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	panic("implement me")
 }
 

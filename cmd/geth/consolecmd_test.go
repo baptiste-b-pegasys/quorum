@@ -100,6 +100,11 @@ func TestAttachWelcome(t *testing.T) {
 		httpPort string
 		wsPort   string
 	)
+	defer SetResetPrivateConfig("ignore")()
+
+	datadir := setupIstanbul(t)
+	defer os.RemoveAll(datadir)
+
 	// Configure the instance for IPC attachment
 	if runtime.GOOS == "windows" {
 		ipc = `\\.\pipe\geth` + strconv.Itoa(trulyRandInt(100000, 999999))
@@ -174,6 +179,36 @@ func trulyRandInt(lo, hi int) int {
 	num, _ := rand.Int(rand.Reader, big.NewInt(int64(hi-lo)))
 	return int(num.Int64()) + lo
 }
+
+var genesis = `{
+    "config": {
+        "chainId": 2017,
+        "homesteadBlock": 1,
+        "eip150Block": 2,
+        "eip150Hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "eip155Block": 3,
+        "eip158Block": 3,
+        "istanbul": {
+            "epoch": 30000,
+            "policy": 0
+        }
+    },
+    "nonce": "0x0",
+    "timestamp": "0x0",
+    "gasLimit": "0x47b760",
+    "difficulty": "0x1",
+    "mixHash": "0x63746963616c2062797a616e74696e65206661756c7420746f6c6572616e6365",
+    "coinbase": "0x0000000000000000000000000000000000000000",
+    "alloc": {
+        "491937757d1b26e29c507b8d4c0b233c2747e68d": {
+            "balance": "0x446c3b15f9926687d2c40534fdb564000000000000"
+        }
+    },
+    "number": "0x0",
+    "gasUsed": "0x0",
+    "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+}
+`
 
 // setupIstanbul creates a temporary directory and copies nodekey and genesis.json.
 // It initializes istanbul by calling geth init

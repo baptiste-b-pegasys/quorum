@@ -17,6 +17,7 @@
 package ethapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -437,7 +438,7 @@ func (s *PrivateAccountAPI) signTransaction(ctx context.Context, args *Transacti
 	tx := args.toTransaction()
 
 	// Quorum
-	if args.IsPrivate() {
+	if tx.IsPrivate() {
 		tx.SetPrivate()
 	}
 	var chainID *big.Int
@@ -466,7 +467,7 @@ func (s *PrivateAccountAPI) SendTransaction(ctx context.Context, args Transactio
 	}
 
 	// Quorum
-	_, replaceDataWithHash, data, err := checkAndHandlePrivateTransaction(ctx, s.b, args.toTransaction(), &args.PrivateTxArgs, args.From, NormalTransaction)
+	_, replaceDataWithHash, data, err := checkAndHandlePrivateTransaction(ctx, s.b, args.toTransaction(), &args.PrivateTxArgs, *args.From, NormalTransaction)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -485,7 +486,7 @@ func (s *PrivateAccountAPI) SendTransaction(ctx context.Context, args Transactio
 	// Quorum
 	if signed.IsPrivate() && s.b.IsPrivacyMarkerTransactionCreationEnabled() {
 		// Look up the wallet containing the requested signer
-		account := accounts.Account{Address: args.From}
+		account := accounts.Account{Address: *args.From}
 		wallet, err := s.am.Find(account)
 		if err != nil {
 			return common.Hash{}, err
@@ -791,10 +792,10 @@ func (s *PublicBlockChainAPI) GetHeaderByHash(ctx context.Context, hash common.H
 }
 
 // GetBlockByNumber returns the requested canonical block.
-// * When blockNr is -1 the chain head is returned.
-// * When blockNr is -2 the pending chain head is returned.
-// * When fullTx is true all transactions in the block are returned, otherwise
-//   only the transaction hash is returned.
+//   - When blockNr is -1 the chain head is returned.
+//   - When blockNr is -2 the pending chain head is returned.
+//   - When fullTx is true all transactions in the block are returned, otherwise
+//     only the transaction hash is returned.
 func (s *PublicBlockChainAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber, fullTx bool) (map[string]interface{}, error) {
 	block, err := s.b.BlockByNumber(ctx, number)
 	if block != nil && err == nil {
@@ -954,9 +955,9 @@ func DoCall(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash 
 	if state == nil || err != nil {
 		return nil, err
 	}
-	if err := overrides.Apply(state.(eth.EthAPIState)); err != nil {
+	/*if err := overrides.Apply(state.(eth.EthAPIState)); err != nil {
 		return nil, err
-	}
+	}*/
 	// Setup context so it may be cancelled the call has completed
 	// or, in case of unmetered gas, setup a context with a timeout.
 	var cancel context.CancelFunc
@@ -1747,18 +1748,13 @@ func (s *PublicTransactionPoolAPI) GetTransactionReceipt(ctx context.Context, ha
 	}
 	receipt := receipts[index]
 
-	// Derive the sender.
-	/*bigblock := new(big.Int).SetUint64(blockNumber)
-	signer := types.MakeSigner(s.b.ChainConfig(), bigblock)
-	from, _ := types.Sender(signer, tx)*/
-
 	// Quorum: note that upstream code has been refactored into this method
-	return getTransactionReceiptCommonCode(tx, blockHash, blockNumber, hash, index, receipt)
+	return s.getTransactionReceiptCommonCode(ctx, tx, blockHash, blockNumber, hash, index, receipt)
 }
 
 // Quorum
 // Common code extracted from GetTransactionReceipt() to enable reuse
-func getTransactionReceiptCommonCode(tx *types.Transaction, blockHash common.Hash, blockNumber uint64, hash common.Hash, index uint64, receipt *types.Receipt) (map[string]interface{}, error) {
+func (s *PublicTransactionPoolAPI) getTransactionReceiptCommonCode(ctx context.Context, tx *types.Transaction, blockHash common.Hash, blockNumber uint64, hash common.Hash, index uint64, receipt *types.Receipt) (map[string]interface{}, error) {
 	fields := map[string]interface{}{
 		"blockHash":         blockHash,
 		"blockNumber":       hexutil.Uint64(blockNumber),
@@ -1775,6 +1771,12 @@ func getTransactionReceiptCommonCode(tx *types.Transaction, blockHash common.Has
 		// Quorum
 		"isPrivacyMarkerTransaction": tx.IsPrivacyMarker(),
 	}
+
+	// Derive the sender.
+	bigblock := new(big.Int).SetUint64(blockNumber)
+	//signer := types.MakeSigner(s.b.ChainConfig(), bigblock)
+	//from, _ := types.Sender(signer, tx)
+
 	// Assign the effective gas price paid
 	if !s.b.ChainConfig().IsLondon(bigblock) {
 		fields["effectiveGasPrice"] = hexutil.Uint64(tx.GasPrice().Uint64())
@@ -1829,12 +1831,16 @@ func (s *PublicTransactionPoolAPI) GetPrivateTransactionByHash(ctx context.Conte
 
 	// now retrieve the private transaction
 	if pmt != nil {
+		block, err := s.b.BlockByHash(ctx, blockHash)
+		if err != nil {
+			return nil, err
+		}
 		tx, managedParties, _, err := private.FetchPrivateTransaction(pmt.Data())
 		if err != nil {
 			return nil, err
 		}
 		if tx != nil && !s.b.PSMR().NotIncludeAny(psm, managedParties...) {
-			return newRPCTransaction(tx, blockHash, blockNumber, index), nil
+			return newRPCTransaction(tx, blockHash, blockNumber, index, block.BaseFee()), nil
 		}
 	}
 
@@ -1886,7 +1892,7 @@ func (s *PublicTransactionPoolAPI) GetPrivateTransactionReceipt(ctx context.Cont
 		return nil, errors.New("could not find receipt for private transaction")
 	}
 
-	return getTransactionReceiptCommonCode(tx, blockHash, blockNumber, hash, index, receipt)
+	return s.getTransactionReceiptCommonCode(ctx, tx, blockHash, blockNumber, hash, index, receipt)
 }
 
 // Quorum: if signing a private TX, set with tx.SetPrivate() before calling this method.
@@ -1913,8 +1919,9 @@ func (s *PublicTransactionPoolAPI) sign(addr common.Address, tx *types.Transacti
 
 // SendTxArgs represents the arguments to sumbit a new transaction into the transaction pool.
 // Quorum: introducing additional arguments encapsulated in PrivateTxArgs struct
-//		   to support private transactions processing.
-/*type SendTxArgs struct {
+//
+//	to support private transactions processing.
+type SendTxArgs struct {
 	PrivateTxArgs // Quorum
 
 	From     common.Address  `json:"from"`
@@ -1995,7 +2002,7 @@ func (args *PrivateTxArgs) SetRawTransactionPrivateFrom(ctx context.Context, b B
 // setDefaults fills in default values for unspecified tx fields.
 func (args *SendTxArgs) setDefaults(ctx context.Context, b Backend) error {
 	if args.GasPrice == nil {
-		price, err := b.SuggestPrice(ctx)
+		price, err := b.SuggestGasTipCap(ctx)
 		if err != nil {
 			return err
 		}
@@ -2034,7 +2041,7 @@ func (args *SendTxArgs) setDefaults(ctx context.Context, b Backend) error {
 		if input == nil {
 			input = args.Data
 		}
-		callArgs := CallArgs{
+		txArgs := TransactionArgs{
 			From:       &args.From, // From shouldn't be nil
 			To:         args.To,
 			GasPrice:   args.GasPrice,
@@ -2043,7 +2050,7 @@ func (args *SendTxArgs) setDefaults(ctx context.Context, b Backend) error {
 			AccessList: args.AccessList,
 		}
 		pendingBlockNr := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
-		estimated, err := DoEstimateGas(ctx, b, callArgs, pendingBlockNr, b.RPCGasCap())
+		estimated, err := DoEstimateGas(ctx, b, txArgs, pendingBlockNr, b.RPCGasCap())
 		if err != nil {
 			return err
 		}
@@ -2095,7 +2102,7 @@ func (args *SendTxArgs) toTransaction() *types.Transaction {
 		}
 	}
 	return types.NewTx(data)
-}*/
+}
 
 // SubmitTransaction is a helper function that submits tx to txPool and logs a message.
 func SubmitTransaction(ctx context.Context, b Backend, tx *types.Transaction, privateFrom string, isRaw bool) (common.Hash, error) {
@@ -2190,7 +2197,7 @@ func runSimulation(ctx context.Context, b Backend, from common.Address, tx *type
 	}
 
 	// Create new call message
-	msg := types.NewMessage(addr, tx.To(), tx.Nonce(), tx.Value(), tx.Gas(), tx.GasPrice(), tx.Data(), tx.AccessList(), false)
+	msg := types.NewMessage(addr, tx.To(), tx.Nonce(), tx.Value(), tx.Gas(), tx.GasTipCap(), tx.GasPrice(), tx.GasFeeCap(), tx.Data(), tx.AccessList(), false)
 
 	// Setup context with timeout as gas un-metered
 	var cancel context.CancelFunc
@@ -2259,7 +2266,7 @@ func (s *PublicTransactionPoolAPI) SendTransaction(ctx context.Context, args Tra
 		return common.Hash{}, err
 	}
 
-	_, replaceDataWithHash, data, err := checkAndHandlePrivateTransaction(ctx, s.b, args.toTransaction(), &args.PrivateTxArgs, args.From, NormalTransaction)
+	_, replaceDataWithHash, data, err := checkAndHandlePrivateTransaction(ctx, s.b, args.toTransaction(), &args.PrivateTxArgs, *args.From, NormalTransaction)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -2273,7 +2280,7 @@ func (s *PublicTransactionPoolAPI) SendTransaction(ctx context.Context, args Tra
 	tx := args.toTransaction()
 
 	// Quorum
-	if args.IsPrivate() {
+	if tx.IsPrivate() {
 		tx.SetPrivate()
 	}
 
@@ -2319,7 +2326,7 @@ func (s *PublicTransactionPoolAPI) FillTransaction(ctx context.Context, args Tra
 	}
 	// Assemble the transaction and obtain rlp
 	// Quorum
-	isPrivate, replaceDataWithHash, hash, err := checkAndHandlePrivateTransaction(ctx, s.b, args.toTransaction(), &args.PrivateTxArgs, args.From, FillTransaction)
+	isPrivate, replaceDataWithHash, hash, err := checkAndHandlePrivateTransaction(ctx, s.b, args.toTransaction(), &args.PrivateTxArgs, *args.From, FillTransaction)
 	if err != nil {
 		return nil, err
 	}
@@ -2468,7 +2475,7 @@ func (s *PublicTransactionPoolAPI) SignTransaction(ctx context.Context, args Tra
 	// Quorum
 	// setDefaults calls DoEstimateGas in ethereum1.9.0, private transaction is not supported for that feature
 	// set gas to constant if nil
-	if args.IsPrivate() && args.Gas == nil {
+	if args.toTransaction().IsPrivate() && args.Gas == nil {
 		gas := (hexutil.Uint64)(90000)
 		args.Gas = &gas
 	}
@@ -2483,7 +2490,7 @@ func (s *PublicTransactionPoolAPI) SignTransaction(ctx context.Context, args Tra
 
 	// Quorum
 	toSign := args.toTransaction()
-	if args.IsPrivate() {
+	if toSign.IsPrivate() {
 		toSign.SetPrivate()
 	}
 	// End Quorum
@@ -2531,7 +2538,7 @@ func (s *PublicTransactionPoolAPI) Resend(ctx context.Context, sendArgs Transact
 	}
 	// setDefaults calls DoEstimateGas in ethereum1.9.0, private transaction is not supported for that feature
 	// set gas to constant if nil
-	if sendArgs.IsPrivate() && sendArgs.Gas == nil {
+	if sendArgs.toTransaction().IsPrivate() && sendArgs.Gas == nil {
 		gas := (hexutil.Uint64)(90000)
 		sendArgs.Gas = &gas
 	}
@@ -2570,7 +2577,7 @@ func (s *PublicTransactionPoolAPI) Resend(ctx context.Context, sendArgs Transact
 			}
 			newTx := sendArgs.toTransaction()
 			// set v param to 37 to indicate private tx before submitting to the signer.
-			if sendArgs.IsPrivate() {
+			if newTx.IsPrivate() {
 				newTx.SetPrivate()
 			}
 			signedTx, err := s.sign(sendArgs.from(), newTx)
@@ -2764,7 +2771,7 @@ func toHexSlice(b [][]byte) []string {
 // date when account management is handled outside Ethereum.
 
 type AsyncSendTxArgs struct {
-	SendTxArgs
+	TransactionArgs
 	CallbackUrl string `json:"callbackUrl"`
 }
 
@@ -2784,8 +2791,7 @@ type Async struct {
 }
 
 func (s *PublicTransactionPoolAPI) send(ctx context.Context, asyncArgs AsyncSendTxArgs) {
-
-	txHash, err := s.SendTransaction(ctx, asyncArgs.SendTxArgs)
+	txHash, err := s.SendTransaction(ctx, asyncArgs.TransactionArgs)
 
 	if asyncArgs.CallbackUrl != "" {
 

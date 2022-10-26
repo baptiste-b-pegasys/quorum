@@ -276,21 +276,15 @@ func (r *ReceiptForStorage) DecodeRLP(s *rlp.Stream) error {
 	// Try decoding from the newest format for future proofness, then the older one
 	// for old nodes that just upgraded. V4 was an intermediate unreleased format so
 	// we do need to decode it, but it's not common (try last).
-	if err := decodeStoredReceiptRLP(r, blob); err == nil {
+	if err := decodeStoredReceiptRLP(r, s, blob); err == nil {
 		return nil
 	}
 	// TODO remove once we know the early adopters of MPS have upgraded to the latest version by doing a full resync
 	// reverse order for MPS receipts as it is the less likely encoding
-	if err := decodeStoredMPSReceiptRLP(r, blob); err == nil {
-		return nil
-	}
-	if err := decodeV3StoredReceiptRLP(r, blob); err == nil {
-		return nil
-	}
-	return decodeV4StoredReceiptRLP(r, blob)
+	return decodeStoredMPSReceiptRLP(r, s, blob)
 }
 
-func decodeStoredReceiptRLP(r *ReceiptForStorage, blob []byte) error {
+func decodeStoredReceiptRLP(r *ReceiptForStorage, s *rlp.Stream, blob []byte) error {
 	var stored storedReceiptRLP
 	if err := s.Decode(&stored); err != nil {
 		return err
@@ -669,7 +663,7 @@ func convertLogsForDecoding(storedLogs []*LogForStorage) []*Log {
 	return result
 }
 
-func decodeStoredMPSReceiptRLP(r *ReceiptForStorage, blob []byte) error {
+func decodeStoredMPSReceiptRLP(r *ReceiptForStorage, s *rlp.Stream, blob []byte) error {
 	var stored storedMPSReceiptRLP
 	if err := rlp.DecodeBytes(blob, &stored); err != nil {
 		return err

@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/istanbul"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
@@ -133,8 +134,8 @@ type Config struct {
 
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
 
-	// Whitelist of required block number -> hash values to accept
-	Whitelist map[uint64]common.Hash `toml:"-"`
+	// AuthorizationList of required block number -> hash values to accept
+	AuthorizationList map[uint64]common.Hash `toml:"-"`
 
 	// Light client options
 	LightServ          int  `toml:",omitempty"` // Maximum percentage of time allowed for serving LES requests
@@ -203,6 +204,23 @@ type Config struct {
 
 	// Berlin block override (TODO: remove after the fork)
 	OverrideLondon *big.Int `toml:",omitempty"`
+
+	// Quorum
+
+	RaftMode             bool
+	EnableNodePermission bool
+	// Istanbul options
+	Istanbul istanbul.Config
+
+	// timeout value for call
+	EVMCallTimeOut time.Duration
+
+	// Quorum
+	core.QuorumChainConfig `toml:"-"`
+
+	// QuorumLight
+	QuorumLightServer bool               `toml:",omitempty"`
+	QuorumLightClient *QuorumLightClient `toml:",omitempty"`
 }
 
 // CreateConsensusEngine creates a consensus engine for the given chain configuration.
@@ -234,4 +252,46 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 	}, notify, noverify)
 	engine.SetThreads(-1) // Disable CPU mining
 	return engine
+}
+
+// Quorum
+
+type QuorumLightClient struct {
+	Use                      bool   `toml:",omitempty"`
+	PSI                      string `toml:",omitempty"`
+	TokenEnabled             bool   `toml:",omitempty"`
+	TokenValue               string `toml:",omitempty"`
+	TokenManagement          string `toml:",omitempty"`
+	RPCTLS                   bool   `toml:",omitempty"`
+	RPCTLSInsecureSkipVerify bool   `toml:",omitempty"`
+	RPCTLSCACert             string `toml:",omitempty"`
+	RPCTLSCert               string `toml:",omitempty"`
+	RPCTLSKey                string `toml:",omitempty"`
+	ServerNode               string `toml:",omitempty"`
+	ServerNodeRPC            string `toml:",omitempty"`
+}
+
+func (q *QuorumLightClient) Enabled() bool {
+	return q != nil && q.Use
+}
+
+func setBFTConfig(istanbulConfig *istanbul.Config, bftConfig *params.BFTConfig) {
+	if bftConfig.BlockPeriodSeconds != 0 {
+		istanbulConfig.BlockPeriod = bftConfig.BlockPeriodSeconds
+	}
+	if bftConfig.EmptyBlockPeriodSeconds != nil {
+		istanbulConfig.EmptyBlockPeriod = *bftConfig.EmptyBlockPeriodSeconds
+	}
+	if bftConfig.RequestTimeoutSeconds != 0 {
+		istanbulConfig.RequestTimeout = bftConfig.RequestTimeoutSeconds * 1000
+	}
+	if bftConfig.EpochLength != 0 {
+		istanbulConfig.Epoch = bftConfig.EpochLength
+	}
+	if bftConfig.ProposerPolicy != 0 {
+		istanbulConfig.ProposerPolicy = istanbul.NewProposerPolicy(istanbul.ProposerPolicyId(bftConfig.ProposerPolicy))
+	}
+	if bftConfig.Ceil2Nby3Block != nil {
+		istanbulConfig.Ceil2Nby3Block = bftConfig.Ceil2Nby3Block
+	}
 }

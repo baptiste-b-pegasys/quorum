@@ -53,7 +53,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
-	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethstats"
@@ -258,15 +257,6 @@ var (
 	AuthorizationListFlag = cli.StringFlag{
 		Name:  "authorizationlist",
 		Usage: "Comma separated block number-to-hash mappings to authorize (<number>=<hash>)",
-	}
-	BloomFilterSizeFlag = cli.Uint64Flag{
-		Name:  "bloomfilter.size",
-		Usage: "Megabytes of memory allocated to bloom-filter for pruning",
-		Value: 2048,
-	}
-	OverrideBerlinFlag = cli.Uint64Flag{
-		Name:  "override.berlin",
-		Usage: "Manually specify Berlin fork-block, overriding the bundled setting",
 	}
 	BloomFilterSizeFlag = cli.Uint64Flag{
 		Name:  "bloomfilter.size",
@@ -1926,12 +1916,6 @@ func CheckExclusive(ctx *cli.Context, args ...interface{}) {
 	}
 }
 
-// SetEthConfig applies eth-related command line flags to the config.
-func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
-	// Avoid conflicting network flags
-	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, RopstenFlag, RinkebyFlag, GoerliFlag, CalaverasFlag)
-}
-
 // TODO bbo move elsewhere
 func SetQLightConfig(ctx *cli.Context, nodeCfg *node.Config, ethCfg *ethconfig.Config) {
 	if ctx.GlobalIsSet(QuorumLightServerFlag.Name) {
@@ -2036,7 +2020,7 @@ func SetQLightConfig(ctx *cli.Context, nodeCfg *node.Config, ethCfg *ethconfig.C
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Avoid conflicting network flags
-	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, RopstenFlag, RinkebyFlag, GoerliFlag, YoloV3Flag)
+	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, RopstenFlag, RinkebyFlag, GoerliFlag, CalaverasFlag)
 	CheckExclusive(ctx, LightServeFlag, SyncModeFlag, "light")
 	CheckExclusive(ctx, DeveloperFlag, ExternalSignerFlag) // Can't use both ephemeral unlocked and external signer
 	if ctx.GlobalString(GCModeFlag.Name) == "archive" && ctx.GlobalUint64(TxLookupLimitFlag.Name) != 0 {
@@ -2301,7 +2285,7 @@ func RegisterEthService(stack *node.Node, cfg *ethconfig.Config) (ethapi.Backend
 		if err != nil {
 			Fatalf("Failed to register the Ethereum service: %v", err)
 		}
-		stack.RegisterAPIs(tracers.APIs(backend.ApiBackend))
+		//stack.RegisterAPIs(tracers.APIs(backend.ApiBackend))
 		return backend.ApiBackend, nil
 	}
 
@@ -2323,7 +2307,7 @@ func RegisterEthService(stack *node.Node, cfg *ethconfig.Config) (ethapi.Backend
 			Fatalf("Failed to create the LES server: %v", err)
 		}
 	}
-	stack.RegisterAPIs(tracers.APIs(backend.APIBackend))
+	//stack.RegisterAPIs(tracers.APIs(backend.APIBackend))
 	return backend.APIBackend, backend
 }
 
@@ -2636,7 +2620,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node, useExist bool) (chain *core.B
 
 	// TODO(rjl493456442) disable snapshot generation/wiping if the chain is read only.
 	// Disable transaction indexing/unindexing by default.
-	chain, err = core.NewBlockChain(chainDb, cache, config, engine, vmcfg, nil, nil, nil)
+	chain, err = core.NewBlockChain(chainDb, cache, config, engine, vmcfg, nil, limit, nil)
 	if err != nil {
 		Fatalf("Can't create BlockChain: %v", err)
 	}

@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/mps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -67,8 +68,8 @@ type Backend interface {
 	ChainConfig() *params.ChainConfig
 	Engine() consensus.Engine
 	ChainDb() ethdb.Database
-	StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, checkLive bool) (*state.StateDB, error)
-	StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (core.Message, vm.BlockContext, *state.StateDB, error)
+	StateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, checkLive bool) (*state.StateDB, mps.PrivateStateRepository, error)
+	StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (core.Message, vm.BlockContext, *state.StateDB, *state.StateDB, mps.PrivateStateRepository, error)
 }
 
 // API is the collection of tracing APIs exposed over the private debugging endpoint.
@@ -85,6 +86,8 @@ type chainContext struct {
 	api *API
 	ctx context.Context
 }
+
+var _ core.ChainContext = &chainContext{}
 
 func (context *chainContext) Engine() consensus.Engine {
 	return context.api.backend.Engine()
@@ -344,7 +347,7 @@ func (api *API) traceChain(ctx context.Context, start, end *types.Block, config 
 			}
 			// Prepare the statedb for tracing. Don't use the live database for
 			// tracing to avoid persisting state junks into the database.
-			statedb, err = api.backend.StateAtBlock(localctx, block, reexec, statedb, false)
+			statedb, _, err = api.backend.StateAtBlock(localctx, block, reexec, statedb, false)
 			if err != nil {
 				failed = err
 				break
@@ -498,7 +501,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 	if config != nil && config.Reexec != nil {
 		reexec = *config.Reexec
 	}
-	statedb, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
+	statedb, _, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +550,7 @@ func (api *API) traceBlock(ctx context.Context, block *types.Block, config *Trac
 		// Generate the next state snapshot fast without tracing
 		msg, _ := tx.AsMessage(signer, block.BaseFee())
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
-		vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
+		vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, statedb, api.backend.ChainConfig(), vm.Config{})
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas())); err != nil {
 			failed = err
 			break
@@ -587,7 +590,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 	if config != nil && config.Reexec != nil {
 		reexec = *config.Reexec
 	}
-	statedb, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
+	statedb, _, err := api.backend.StateAtBlock(ctx, parent, reexec, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +662,7 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 			}
 		}
 		// Execute the transaction and flush any traces to disk
-		vmenv := vm.NewEVM(vmctx, txContext, statedb, chainConfig, vmConf)
+		vmenv := vm.NewEVM(vmctx, txContext, statedb, statedb, chainConfig, vmConf)
 		statedb.Prepare(tx.Hash(), block.Hash(), i)
 		_, err = core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas()))
 		if writer != nil {
@@ -714,7 +717,7 @@ func (api *API) TraceTransaction(ctx context.Context, hash common.Hash, config *
 	if err != nil {
 		return nil, err
 	}
-	msg, vmctx, statedb, err := api.backend.StateAtTransaction(ctx, block, int(index), reexec)
+	msg, vmctx, statedb, _, _, err := api.backend.StateAtTransaction(ctx, block, int(index), reexec)
 	if err != nil {
 		return nil, err
 	}
@@ -751,7 +754,7 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 	if config != nil && config.Reexec != nil {
 		reexec = *config.Reexec
 	}
-	statedb, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true)
+	statedb, _, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -820,7 +823,7 @@ func (api *API) traceTx(ctx context.Context, message core.Message, txctx *txTrac
 		tracer = vm.NewStructLogger(config.LogConfig)
 	}
 	// Run the transaction with tracing enabled.
-	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{Debug: true, Tracer: tracer, NoBaseFee: true})
+	vmenv := vm.NewEVM(vmctx, txContext, statedb, statedb, api.backend.ChainConfig(), vm.Config{Debug: true, Tracer: tracer, NoBaseFee: true})
 
 	// Call Prepare to clear out the statedb access list
 	statedb.Prepare(txctx.hash, txctx.block, txctx.index)
@@ -864,4 +867,22 @@ func APIs(backend Backend) []rpc.API {
 			Public:    false,
 		},
 	}
+}
+
+// Quorum
+
+func (c *chainContext) CheckAndSetPrivateState(txLogs []*types.Log, privateState *state.StateDB, psi types.PrivateStateIdentifier) {
+
+}
+
+func (c *chainContext) Config() *params.ChainConfig {
+	return c.api.backend.ChainConfig()
+}
+
+func (c *chainContext) PrivateStateManager() mps.PrivateStateManager {
+	return nil // TODO :bbo merge
+}
+
+func (c *chainContext) QuorumConfig() *core.QuorumChainConfig {
+	return nil // TODO bbo merge
 }

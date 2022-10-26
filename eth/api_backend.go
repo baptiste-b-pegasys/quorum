@@ -35,10 +35,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
-	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
-	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
 	pcore "github.com/ethereum/go-ethereum/permission/core"
@@ -64,8 +62,8 @@ type EthAPIBackend struct {
 	proxyClient *rpc.Client
 }
 
-var _ ethapi.Backend = &EthAPIBackend{}
-var _ tracers.Backend = &EthAPIBackend{}
+//var _ ethapi.Backend = &EthAPIBackend{}
+//var _ tracers.Backend = &EthAPIBackend{}
 
 func (b *EthAPIBackend) ProxyEnabled() bool {
 	return b.eth.config.QuorumLightClient.Enabled()

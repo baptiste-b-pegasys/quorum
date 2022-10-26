@@ -24,6 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
@@ -396,7 +397,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		}
 		//if input is empty for the smart contract call, return (refunding any gas deducted)
 		if len(data) == 0 && isPrivate {
-			st.refundGas()
+			st.refundGas(params.RefundQuotient)
 			st.state.AddBalance(st.evm.Context.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.gasPrice))
 			return &ExecutionResult{
 				UsedGas:    0,

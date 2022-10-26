@@ -1261,7 +1261,7 @@ func TestForkLogsReborn(t *testing.T) {
 		t.Error("Event should be removed")
 	}
 	// 9.
-	if err := sim.SendTransaction(context.Background(), tx); err != nil {
+	if err := sim.SendTransaction(context.Background(), tx, bind.PrivateTxArgs{}); err != nil {
 		t.Errorf("sending transaction: %v", err)
 	}
 	sim.Commit()
@@ -1296,7 +1296,7 @@ func TestForkResendTx(t *testing.T) {
 
 	_tx := types.NewTransaction(0, testAddr, big.NewInt(1000), params.TxGas, gasPrice, nil)
 	tx, _ := types.SignTx(_tx, types.HomesteadSigner{}, testKey)
-	sim.SendTransaction(context.Background(), tx)
+	sim.SendTransaction(context.Background(), tx, bind.PrivateTxArgs{})
 	sim.Commit()
 	// 3.
 	receipt, _ := sim.TransactionReceipt(context.Background(), tx.Hash())
@@ -1309,7 +1309,7 @@ func TestForkResendTx(t *testing.T) {
 	}
 	// 5.
 	sim.Commit()
-	if err := sim.SendTransaction(context.Background(), tx); err != nil {
+	if err := sim.SendTransaction(context.Background(), tx, bind.PrivateTxArgs{}); err != nil {
 		t.Errorf("sending transaction: %v", err)
 	}
 	sim.Commit()

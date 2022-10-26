@@ -181,9 +181,45 @@ func (c *Conn) Read() Message {
 	return msg
 }
 
+// Read66 reads an eth66 packet from the connection.
 func (c *Conn) Read66() (uint64, Message) {
 	code, rawData, _, err := c.Conn.Read()
 	if err != nil {
+		return 0, errorf("could not read from connection: %v", err)
+	}
+
+	var msg Message
+	switch int(code) {
+	case (Hello{}).Code():
+		msg = new(Hello)
+	case (Ping{}).Code():
+		msg = new(Ping)
+	case (Pong{}).Code():
+		msg = new(Pong)
+	case (Disconnect{}).Code():
+		msg = new(Disconnect)
+	case (Status{}).Code():
+		msg = new(Status)
+	case (GetBlockHeaders{}).Code():
+		ethMsg := new(eth.GetBlockHeadersPacket66)
+		if err := rlp.DecodeBytes(rawData, ethMsg); err != nil {
+			return 0, errorf("could not rlp decode message: %v", err)
+		}
+		return ethMsg.RequestId, GetBlockHeaders(*ethMsg.GetBlockHeadersPacket)
+	case (BlockHeaders{}).Code():
+		ethMsg := new(eth.BlockHeadersPacket66)
+		if err := rlp.DecodeBytes(rawData, ethMsg); err != nil {
+			return 0, errorf("could not rlp decode message: %v", err)
+		}
+		return ethMsg.RequestId, BlockHeaders(ethMsg.BlockHeadersPacket)
+	case (GetBlockBodies{}).Code():
+		ethMsg := new(eth.GetBlockBodiesPacket66)
+		if err := rlp.DecodeBytes(rawData, ethMsg); err != nil {
+			return 0, errorf("could not rlp decode message: %v", err)
+		}
+		return ethMsg.RequestId, GetBlockBodies(ethMsg.GetBlockBodiesPacket)
+	case (BlockBodies{}).Code():
+		ethMsg := new(eth.BlockBodiesPacket66)
 		if err := rlp.DecodeBytes(rawData, ethMsg); err != nil {
 			return 0, errorf("could not rlp decode message: %v", err)
 		}

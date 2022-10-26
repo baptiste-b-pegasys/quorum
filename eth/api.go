@@ -264,16 +264,20 @@ func NewPublicDebugAPI(eth *Ethereum) *PublicDebugAPI {
 
 // DumpBlock retrieves the entire state of the database at a given block.
 // Quorum adds an additional parameter to support private state dump
-func (api *PublicDebugAPI) DumpBlock(blockNr rpc.BlockNumber, typ *string) (state.Dump, error) {
+func (api *PublicDebugAPI) DumpBlock(ctx context.Context, blockNr rpc.BlockNumber, typ *string) (state.Dump, error) {
 	opts := &state.DumpConfig{
 		OnlyWithAddresses: true,
 		Max:               AccountRangeMaxResults, // Sanity limit over RPC
+	}
+	psm, err := api.eth.blockchain.PrivateStateManager().ResolveForUserContext(ctx)
+	if err != nil {
+		return state.Dump{}, err
 	}
 	if blockNr == rpc.PendingBlockNumber {
 		// If we're dumping the pending state, we need to request
 		// both the pending block as well as the pending state from
 		// the miner and operate on those
-		_, stateDb := api.eth.miner.Pending()
+		_, stateDb, _ := api.eth.miner.Pending(psm.ID)
 		return stateDb.RawDump(opts), nil
 	}
 	var block *types.Block
@@ -283,16 +287,16 @@ func (api *PublicDebugAPI) DumpBlock(blockNr rpc.BlockNumber, typ *string) (stat
 		block = api.eth.blockchain.GetBlockByNumber(uint64(blockNr))
 	}
 	if block == nil {
-		return common.Hash{}, fmt.Errorf("block #%d not found", blockNr)
+		return state.Dump{}, fmt.Errorf("block #%d not found", blockNr)
 	}
-	publicState, privateState, err = api.eth.BlockChain().StateAtPSI(block.Root(), defaultPSM.ID)
+	publicState, privateState, err := api.eth.BlockChain().StateAtPSI(block.Root(), psm.ID)
 	if err != nil {
-		return common.Dump{}, err
+		return state.Dump{}, err
 	}
 	if typ != nil && *typ == "private" {
-		return privateState.RawDump(false, false, true), nil
+		return privateState.RawDump(nil), nil
 	}
-	return publicState.RawDump(false, false, true), nil
+	return publicState.RawDump(nil), nil
 }
 
 func (api *PublicDebugAPI) PrivateStateRoot(ctx context.Context, blockNr rpc.BlockNumber) (common.Hash, error) {
@@ -638,8 +642,8 @@ func (api *PublicDebugAPI) DumpAddress(ctx context.Context, address common.Addre
 	return state.DumpAccount{}, errors.New("error retrieving state")
 }
 
-//Taken from DumpBlock, as it was reused in DumpAddress.
-//Contains modifications from the original to return the private state db, as well as public.
+// Taken from DumpBlock, as it was reused in DumpAddress.
+// Contains modifications from the original to return the private state db, as well as public.
 func (api *PublicDebugAPI) getStateDbsFromBlockNumber(ctx context.Context, blockNr rpc.BlockNumber) (*state.StateDB, *state.StateDB, error) {
 	psm, err := api.eth.blockchain.PrivateStateManager().ResolveForUserContext(ctx)
 	if err != nil {

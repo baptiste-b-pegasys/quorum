@@ -27,7 +27,6 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/accounts"
-	"github.com/ethereum/go-ethereum/accounts/external"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/accounts/pluggable"
 	"github.com/ethereum/go-ethereum/accounts/scwallet"
@@ -530,6 +529,7 @@ func makeAccountManager(conf *Config) (*accounts.Manager, string, error) {
 	}
 	// Assemble the account manager and supported backends
 	var backends []accounts.Backend
+	/*TODO:bbo merge
 	if len(conf.ExternalSigner) > 0 {
 		log.Info("Using external signer", "url", conf.ExternalSigner)
 		if extapi, err := external.NewExternalBackend(conf.ExternalSigner); err == nil {
@@ -537,7 +537,7 @@ func makeAccountManager(conf *Config) (*accounts.Manager, string, error) {
 		} else {
 			return nil, "", fmt.Errorf("error connecting to external signer: %v", err)
 		}
-	}
+	}*/
 	if len(backends) == 0 {
 		// For now, we're using EITHER external signer OR local signers.
 		// If/when we implement some form of lockfile for USB and keystore wallets,
