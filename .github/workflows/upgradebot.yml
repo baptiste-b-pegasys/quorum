@@ -21,10 +21,10 @@ jobs:
         id: go
       - name: Clone upgrade geth bot
         run: |
-          cd $GOROOT
           git clone https://github.com/baptiste-b-pegasys/quorum-bots.git $GOPATH/src/upgradebot
       - name: Execute upgrade geth bot
         run: |
           git config --global user.email "${{github.actor}}@users.noreply.github.com"
           git config --global user.name "${{github.actor}}"
-          go run upgradebot/cmd
+          cd $GOPATH/src/upgradebot
+          go run ./cmd
